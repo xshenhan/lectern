@@ -1,7 +1,7 @@
 // Run after npm run build. An optional first argument selects a packaged Electron executable.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { _electron } from 'playwright';
@@ -177,7 +177,47 @@ try {
   await resizeWindow(1280);
   await separator().dblclick();
   await expectSidebarWidth(304);
-  console.log(JSON.stringify({ success: true, defaultWidth: 304, persistedWidth: preferred, dockedChat, narrowMax: 350, rows, fonts, resultDirectory }));
+
+  // Deliver an unread reply to an older conversation so the two sort modes visibly disagree.
+  const olderId = randomUUID();
+  const olderLog = path.join(project, `${olderId}.jsonl`);
+  const olderDate = (hours) => new Date(Date.parse(timestamp) - hours * 60 * 60 * 1000).toISOString();
+  const olderRecords = (hours, user, assistant) => records.map((record, i) => JSON.stringify({
+    ...record, uuid: randomUUID(), sessionId: olderId, timestamp: olderDate(hours - i),
+    message: { ...record.message, content: i === 0 ? user : [{ type: 'text', text: assistant }] },
+  })).join('\n') + '\n';
+  await writeFile(olderLog, olderRecords(48, '较早的会话', '已经读过的回复'));
+  const olderRow = page.locator(`.session-row[data-session-id="${olderId}"]`);
+  await olderRow.waitFor();
+  assert.equal(await olderRow.locator('.state-unread').count(), 0);
+  await appendFile(olderLog, olderRecords(24, '较早会话的新问题', '一条未读的回复'));
+  await olderRow.locator('.state-unread').waitFor();
+
+  const selectedRow = page.locator(`.session-row[data-session-id="${sessionId}"]`);
+  const sort = page.getByRole('button', { name: '对话排序', exact: true });
+  const recent = '按更新时间', priority = '按对话优先级';
+  const expectSort = async (label, first, second) => {
+    await page.waitForFunction(([first, second]) => {
+      const rows = document.querySelectorAll('.workspace-tree-group .session-row');
+      return rows.length === 2 && rows[0].dataset.sessionId === first && rows[1].dataset.sessionId === second;
+    }, [first, second]);
+    assert.equal(await sort.getAttribute('aria-description'), label);
+    assert.equal(await selectedRow.getAttribute('aria-current'), 'page', 'Sorting keeps the current chat selected');
+  };
+  await expectSort(recent, sessionId, olderId);
+  await sort.press('Enter');
+  const priorityItem = page.getByRole('menuitem', { name: priority, exact: true });
+  await priorityItem.waitFor();
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await priorityItem.evaluate(item => item === document.activeElement), true);
+  await page.keyboard.press('Enter');
+  await expectSort(priority, olderId, sessionId);
+  await page.reload();
+  await expectSort(priority, olderId, sessionId);
+  await sort.click();
+  await page.getByRole('menuitem', { name: recent, exact: true }).click();
+  await expectSort(recent, sessionId, olderId);
+  console.log(JSON.stringify({ success: true, defaultWidth: 304, persistedWidth: preferred, dockedChat, narrowMax: 350, rows, fonts, sidebarSort: 'recent and unread priority, keyboard, selection, reload', resultDirectory }));
 } catch (error) {
   await page?.screenshot({ path: path.join(resultDirectory, 'failure.png') }).catch(() => {});
   throw error;

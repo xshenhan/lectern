@@ -69,6 +69,18 @@ test('sidebar sort preference supports existing profiles and remembers priority'
   assert.equal(read({ sidebarSort: 'priority' }), 'priority');
 });
 
+test('sidebar sorting preserves discovery order when recency and priority tie', () => {
+  const updatedAt = '2026-01-01T00:00:00.000Z';
+  const chats: SessionInfo[] = [
+    { ...session, id: 'z-history', updatedAt },
+    { ...session, id: 'a-history', updatedAt },
+    { ...session, id: 'active', updatedAt, paneId: '%1', status: 'idle' },
+  ];
+  const states = new Map(chats.map(chat => [chat.id, sessionSidebarState(chat)]));
+  assert.deepEqual([...chats].sort(compareSidebarSessions).map(chat => chat.id), ['z-history', 'a-history', 'active']);
+  assert.deepEqual([...chats].sort((a, b) => compareSidebarSessions(a, b, states)).map(chat => chat.id), ['active', 'z-history', 'a-history']);
+});
+
 test('folder aggregation prioritizes actionable failures and waiting over idle or saved history', () => {
   const states = ['history', 'idle', 'working', 'waiting', 'error'].map(status => sessionSidebarState({ ...session, status: status as NavigationSessionStatus }));
   assert.equal(aggregateSidebarState(states), 'error');
