@@ -2,8 +2,10 @@ import { useId, useMemo, useState, type ReactNode } from "react";
 import { workspaceMachines, type WorkspaceMachine } from "./workspace-machines";
 import { Laptop, FolderPlus, LogIn } from "lucide-react";
 import "./machine-tree.css";
-import { archiveKey, beginChatDrag, endChatDrag, moveProject, orderProjects, useDesktopState, workspaceDragType } from "./desktop-state";
+import { archiveKey, beginChatDrag, endChatDrag, moveProject, orderProjects, setDesktop, useDesktopState, workspaceDragType, type SidebarSortMode } from "./desktop-state";
 import {
+  ArrowDownWideNarrow,
+  Check,
   ChevronDown,
   ChevronRight,
   ChevronsUp,
@@ -18,7 +20,7 @@ import {
 import type { SessionInfo, SessionSnapshot, Workspace } from "../shared/types";
 import { SessionRenameDialog } from "./SessionRenameDialog";
 import type { WorkspaceDiscoveryState } from "./workspace-discovery-cache";
-import { aggregateSidebarState, sessionSidebarState } from "./sidebar-status";
+import { aggregateSidebarState, compareSidebarSessions, sessionSidebarState } from "./sidebar-status";
 import { showContextMenu } from "./ContextMenu";
 import { folderMenu, machineMenu, sessionMenu, type SidebarMenuActions } from "./sidebar-menus";
 import { HoverPrefetch } from "./sidebar-prefetch";
@@ -29,6 +31,20 @@ import { needsSshLogin } from "./ssh-login";
 import { t } from '../shared/i18n';
 
 const initialSessions = 5, moreSessions = 10;
+const sortLabels = { recent: 'sidebar.sortRecent', priority: 'sidebar.sortPriority' } as const;
+
+export function SidebarSortButton({ mode }: { mode: SidebarSortMode }) {
+  const label = t('sidebar.sortConversations');
+  const current = t(sortLabels[mode]);
+  return <button type="button" className="icon-button" aria-label={label} aria-description={current}
+    aria-haspopup="menu" title={t('sidebar.sortCurrent', { mode: current })}
+    onClick={event => showContextMenu(event, (['recent', 'priority'] as const).map(sort => ({
+      label: t(sortLabels[sort]), icon: sort === mode ? <Check size={14} /> : undefined,
+      onSelect: () => setDesktop({ sidebarSort: sort }),
+    })), label)}>
+    <ArrowDownWideNarrow size={15} aria-hidden="true" />
+  </button>;
+}
 
 function MachineSection({ machine, searchOpen, demo, add, login, menu, connection, onNavigate, onOpen, children }: {
   machine: WorkspaceMachine; searchOpen: boolean; demo: boolean; add(): void; login?(): void; menu?: SidebarMenuActions;
@@ -134,7 +150,7 @@ export function SidebarTree({
   const connectionOf = useMachineConnections();
   const [over,setOver] = useState("");
   const [rename, setRename] = useState<{ workspaceId: string; session: SessionInfo } | null>(null);
-  // Each folder lists its five most recently updated conversations; t('sidebar.showMore') adds ten at a time.
+  // Each folder lists five conversations initially; Show more adds ten at a time.
   const [shown, setShown] = useState<Record<string, number>>({});
   const ordered = orderProjects(workspaces, prefs.projectOrder);
   // Archived conversations leave the sidebar; a running one always stays visible.
@@ -169,13 +185,12 @@ export function SidebarTree({
           selected: workspace.id === workspaceId && session.id === sessionId,
           scanError: entry?.error, unread: entry?.unreadSessionIds?.has(session.id),
         })]));
+        const sortStates = prefs.sidebarSort === 'priority' ? displayStates : undefined;
         const matching = allSessions.filter(chat=>!query || folderMatches || chat.title?.toLocaleLowerCase().includes(query))
-          // A chat that has not written its first record yet is the newest one.
-          .sort((a, b) => (b.updatedAt ?? '\uffff').localeCompare(a.updatedAt ?? '\uffff'));
+          .sort((a, b) => compareSidebarSessions(a, b, sortStates));
         const limit = shown[workspace.id] ?? initialSessions;
         const sessions = query ? matching : matching.filter((chat, index) => index < limit || (workspace.id === workspaceId && chat.id === sessionId));
         const hidden = matching.length - sessions.length;
-        // After t('sidebar.showMore'), the list can return to the newest five.
         const collapsible = open && !query && limit > initialSessions;
         const collapseSessions = () => setShown(current => {
           const next = { ...current };

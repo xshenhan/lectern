@@ -70,7 +70,7 @@ export function folderMenu(workspace: Workspace, open: boolean, actions: Sidebar
   return [
     { label: t('sidebar.newChat'), icon: icon(Plus), disabled: actions.busy, onSelect: () => actions.newSession(workspace) },
     { label: t(open ? 'sidebar.collapse' : 'sidebar.expand'), icon: icon(open ? ChevronRight : ChevronDown), onSelect: actions.toggle },
-    actions.collapseSessions && { label: t('sidebar.collapseChats'), icon: icon(ChevronsUp), hint: t('sidebar.keepLatest'), onSelect: actions.collapseSessions },
+    actions.collapseSessions && { label: t('sidebar.collapseChats'), icon: icon(ChevronsUp), hint: t('sidebar.keepFirst'), onSelect: actions.collapseSessions },
     { label: t('sidebar.refreshList'), icon: icon(RefreshCw), onSelect: () => actions.refresh(workspace) },
     workspace.historyScan === false && { label: t('sidebar.scanAll'), icon: icon(History), onSelect: () => actions.scanHistory(workspace) },
     "separator",

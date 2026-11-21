@@ -58,7 +58,7 @@ import { ConversationTranscript } from "./ConversationTranscript";
 import { WorkspaceDialog } from "./WorkspaceDialog";
 import { TerminalPanel, type TerminalPanelHandle } from "./TerminalPanel";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
-import { SidebarTree } from "./SidebarTree";
+import { SidebarSortButton, SidebarTree } from "./SidebarTree";
 import { sshOnly } from "../shared/supported-targets";
 import { TooltipHost, tip } from "./Tooltip";
 import "./tooltip.css";
@@ -1277,6 +1277,7 @@ export default function App({view = "primary"}: {view?: ChatView}) {
         <div className="sidebar-section-heading">
           <span>{t('app.machines')}</span>
           <div className="sidebar-heading-actions">
+          <SidebarSortButton mode={prefs.sidebarSort} />
           {!sshOnly(info.platform) && <button
             className="icon-button"
             aria-label={t('app.discoverLocal')}

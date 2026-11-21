@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { aggregateSidebarState, sessionSidebarState } from '../src/renderer/sidebar-status';
+import { aggregateSidebarState, compareSidebarSessions, sessionSidebarState } from '../src/renderer/sidebar-status';
+import { loadDesktopState } from '../src/renderer/desktop-state';
 import { ReplyReceipts } from '../src/renderer/sidebar-receipts';
 import { completedReplyOffset } from '../src/core/reply-completion';
 import type { NavigationSessionStatus, SessionInfo, SessionSnapshot } from '../src/shared/types';
@@ -41,6 +42,31 @@ test('optimistic work and permission waiting override an older idle navigation o
   for (const status of ['working', 'waiting'] as const) {
     assert.equal(sessionSidebarState(session, { snapshot: { ...snapshot, status, paneId: '%1', navigationStatus: 'idle' } }).kind, status);
   }
+});
+
+test('sidebar sorting keeps recency by default and can bring actionable or active chats forward', () => {
+  const updatedAt = (day: string) => `2026-01-${day}T00:00:00.000Z`;
+  const chats: SessionInfo[] = [
+    { ...session, id: 'new', paneId: '%1', status: 'idle' },
+    { ...session, id: 'history', updatedAt: updatedAt('08') },
+    { ...session, id: 'unread', updatedAt: updatedAt('07') },
+    { ...session, id: 'background', updatedAt: updatedAt('06'), paneId: '%2', status: 'idle', background: 'Running shell' },
+    { ...session, id: 'working', updatedAt: updatedAt('05'), paneId: '%3', status: 'working' },
+    { ...session, id: 'error', updatedAt: updatedAt('04'), status: 'error' },
+    { ...session, id: 'waiting', updatedAt: updatedAt('03'), paneId: '%4', status: 'waiting' },
+  ];
+  const states = new Map(chats.map(chat => [chat.id, sessionSidebarState(chat, { unread: chat.id === 'unread' })]));
+  assert.deepEqual([...chats].reverse().sort(compareSidebarSessions).map(chat => chat.id),
+    ['new', 'history', 'unread', 'background', 'working', 'error', 'waiting']);
+  assert.deepEqual([...chats].reverse().sort((a, b) => compareSidebarSessions(a, b, states)).map(chat => chat.id),
+    ['error', 'waiting', 'unread', 'background', 'working', 'new', 'history']);
+});
+
+test('sidebar sort preference supports existing profiles and remembers priority', () => {
+  const read = (value: object) => loadDesktopState({ getItem: () => JSON.stringify(value) }).sidebarSort;
+  assert.equal(read({}), 'recent');
+  assert.equal(read({ sidebarSort: 'invalid' }), 'recent');
+  assert.equal(read({ sidebarSort: 'priority' }), 'priority');
 });
 
 test('folder aggregation prioritizes actionable failures and waiting over idle or saved history', () => {

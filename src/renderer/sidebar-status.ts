@@ -140,3 +140,18 @@ export function aggregateSidebarState(states: SidebarSessionState[]) {
   for (const dot of ['error', 'waiting', 'unread'] as const) if (states.some(state => state.dot === dot)) return dot;
   return undefined;
 }
+
+type SortState = Pick<SidebarSessionState, 'kind' | 'dot' | 'live'>;
+type SortSession = Pick<SessionInfo, 'id' | 'updatedAt'>;
+
+function sessionPriority(state?: SortState) {
+  if (state?.dot === 'error' || state?.kind === 'waiting') return 0;
+  if (state?.kind === 'working' || state?.dot === 'background' || state?.dot === 'unread') return 1;
+  return state?.live === true ? 2 : 3;
+}
+
+export function compareSidebarSessions(a: SortSession, b: SortSession, states?: ReadonlyMap<string, SortState>) {
+  const priority = states ? sessionPriority(states.get(a.id)) - sessionPriority(states.get(b.id)) : 0;
+  // A new chat that has not written its first record yet belongs with the newest chats.
+  return priority || (b.updatedAt ?? '\uffff').localeCompare(a.updatedAt ?? '\uffff');
+}
