@@ -63,15 +63,21 @@ try {
   assert.equal(await page.evaluate(async () => (await window.desktop.listWorkspaces()).length), 0);
   if (process.platform === 'darwin') {
     // The menu remains available after the last window closes on macOS.
-    const closed = page.waitForEvent('close');
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
-    await closed;
-    const reopened = app.waitForEvent('window');
-    await app.evaluate(({ Menu }) => {
-      Menu.getApplicationMenu().items.flatMap(item => item.submenu?.items ?? [])
-        .find(item => item.label === '设置…').click();
-    });
-    const settingsWindow = await reopened;
+    await Promise.all([
+      page.waitForEvent('close'),
+      app.evaluate(({ BrowserWindow }) => new Promise(resolve => {
+        const win = BrowserWindow.getAllWindows()[0];
+        win.once('closed', () => resolve());
+        win.close();
+      })),
+    ]);
+    const [settingsWindow] = await Promise.all([
+      app.waitForEvent('window'),
+      app.evaluate(({ Menu }) => {
+        Menu.getApplicationMenu().items.flatMap(item => item.submenu?.items ?? [])
+          .find(item => item.label === '设置…').click();
+      }),
+    ]);
     await settingsWindow.locator('dialog.desktop-preferences[open]').waitFor();
   }
   console.log('PASS: packaged Chinese menus, app icon, isolated renderer, onboarding and SSH workspace form.');

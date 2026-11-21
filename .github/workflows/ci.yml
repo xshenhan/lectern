@@ -163,14 +163,21 @@ jobs:
         run: node scripts/release-checksums.mjs test-results/package/assets
       - name: Verify macOS disk image
         if: runner.os == 'macOS'
+        id: disk-image
         shell: bash
-        run: hdiutil verify test-results/package/assets/*-mac-${{ matrix.arch }}.dmg
+        run: |
+          images=(test-results/package/assets/*-mac-${{ matrix.arch }}.dmg)
+          test "${#images[@]}" -eq 1
+          hdiutil verify "${images[0]}"
+          printf 'path=%s\nname=%s\n' "${images[0]}" "${images[0]##*/}" >> "$GITHUB_OUTPUT"
       - name: Upload macOS DMG
         if: runner.os == 'macOS'
         id: dmg
         uses: actions/upload-artifact@v7
         with:
-          path: test-results/package/assets/*-mac-${{ matrix.arch }}.dmg
+          # Raw uploads use the filename, and overwrite deletes by the explicit name.
+          name: ${{ steps.disk-image.outputs.name }}
+          path: ${{ steps.disk-image.outputs.path }}
           archive: false
           if-no-files-found: error
           overwrite: true
