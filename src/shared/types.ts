@@ -2,6 +2,7 @@ import type { Locale, LocalePreference } from './i18n';
 import type { SshConfigImport } from './ssh-config';
 import type { UpdateState } from './update-check';
 import type { HostCheck } from './host-tools';
+import type { CodexDecision, CodexThread, CodexWorkspace } from './codex';
 export type HostKind = 'local' | 'ssh';
 export interface Workspace {
   id: string;
@@ -474,6 +475,11 @@ export type ChatView = 'primary' | 'secondary';
 export type MenuAction = "preferences" | "help" | "checkForUpdates";
 
 export interface DesktopAPI {
+  codexWorkspace(workspaceId: string, threadId?: string): Promise<CodexWorkspace>;
+  codexCreate(workspaceId: string): Promise<CodexThread>;
+  codexSend(workspaceId: string, threadId: string, text: string): Promise<void>;
+  codexInterrupt(workspaceId: string, threadId: string): Promise<void>;
+  codexAnswer(workspaceId: string, threadId: string, approvalId: string, decision: CodexDecision): Promise<void>;
   onMenuAction(callback: (action: MenuAction) => void): () => void;
   /** Includes the current native window state after subscribing. */
   onWindowReadable(callback: (readable: boolean) => void): () => void;

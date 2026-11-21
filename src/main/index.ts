@@ -3,9 +3,10 @@ import { editMenuItems } from './edit-menu';
 import { artifactMediaType } from '../backend/artifact-media';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
+import { mkdir, readFile, realpath, writeFile, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Backend, validateWorkspace } from '../backend';
+import { CodexBackend } from '../backend/codex';
 import { HistoryIndexDiskStore } from '../backend/history-index-disk-store';
 import { installSilentWindows, silentWindowsRequested } from './silent-windows';
 import { installApplicationMenu } from './application-menu';
@@ -50,6 +51,8 @@ initializeLocale();
 const ownsProfile = app.requestSingleInstanceLock();
 let controller: Controller;
 let controllers: SessionViews;
+let codex: CodexBackend | undefined;
+let codexQuitPrompt = false;
 let artifactAccess: ArtifactAccess;
 let window: BrowserWindow | undefined;
 let cleanup: (() => Promise<void>) | undefined;
@@ -185,7 +188,7 @@ function createWindow() {
   window.on('close', event => {
     if (process.platform === 'darwin' || shutdownState !== 'running' || systemEnding || !quitFlow) return;
     event.preventDefault();
-    quitFlow.request(installerRecent() ? 'installer' : 'window');
+    void requestQuit(installerRecent() ? 'installer' : 'window');
   });
   // Windows logging off or shutting down: let it end the session without asking.
   window.on('query-session-end', () => { systemEnding = true; });
@@ -203,6 +206,22 @@ function createWindow() {
 
 /** The update installer was opened from Lectern a moment ago: it will close the app itself. */
 function installerRecent() { return Date.now() - installerOpenedAt < 10 * 60_000; }
+
+async function requestQuit(reason: QuitReason) {
+  if ((reason === 'user' || reason === 'window') && !quitFlow?.current && codex?.hasActiveTurns()) {
+    if (codexQuitPrompt) return;
+    codexQuitPrompt = true;
+    try {
+      const options: MessageBoxOptions = {
+        type: 'warning', message: t('codex.quitTitle'), detail: t('codex.quitDetail'),
+        buttons: [t('dialogs.cancel'), t('codex.quitContinue')], cancelId: 0, defaultId: 0, noLink: true,
+      };
+      const result = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+      if (result.response !== 1) return;
+    } finally { codexQuitPrompt = false; }
+  }
+  quitFlow?.request(reason);
+}
 
 function bringForward(win: BrowserWindow) {
   if (win.isMinimized()) win.restore();
@@ -269,6 +288,7 @@ async function runningConversations() {
 function shutDown() {
   if (shutdownState !== 'running') return;
   shutdownState = 'cleaning';
+  codex?.dispose();
   for (const timer of quitTimers.values()) clearTimeout(timer);
   void (async () => {
     diagnostic.event('app.stopping', {}, 'info');
@@ -318,6 +338,16 @@ async function boot() {
     await store.load();
     const cache = new SessionSettingsCache(new SessionSettingsDiskStore(app.getPath('userData')));
     controller = new Controller(store, new Backend({ historyIndexStore: new HistoryIndexDiskStore(app.getPath('userData')) }), cache);
+    if (!sshOnly(process.platform)) codex = new CodexBackend(path.join(app.getPath('userData'), 'codex-threads.json'));
+  }
+  async function codexTarget(id: string) {
+    if (shutdownState !== 'running') throw new Error(t('codex.shuttingDown'));
+    const backend = codex;
+    const workspace = controller.store.get(id);
+    if (!backend || workspace.kind !== 'local') throw new Error(t('codex.localOnly'));
+    const home = app.getPath('home');
+    const directory = workspace.cwd === '~' ? home : workspace.cwd.startsWith('~/') ? path.join(home, workspace.cwd.slice(2)) : workspace.cwd;
+    return { backend, cwd: await realpath(directory) };
   }
   controller.warmModelCatalogs();
   // An open `@` list asks again when a background scan of its folder lands.
@@ -366,6 +396,33 @@ async function boot() {
   // The backend starts with dynamic workflows on; the renderer sends the preference at startup.
   let launchWorkflows = true;
   const methods: Record<string, (...args: any[]) => unknown> = {
+    codexWorkspace: async (id, threadId) => {
+      const { backend, cwd } = await codexTarget(id);
+      const workspace = await backend.list(cwd);
+      if (!workspace.threads.some(thread => thread.id === threadId)) return workspace;
+      try {
+        const thread = await backend.read(cwd, threadId);
+        return { ...await backend.list(cwd), thread };
+      } catch (error) {
+        return { ...await backend.list(cwd), threadError: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    codexCreate: async id => {
+      const { backend, cwd } = await codexTarget(id);
+      return backend.create(cwd);
+    },
+    codexSend: async (id, threadId, text) => {
+      const { backend, cwd } = await codexTarget(id);
+      return backend.send(cwd, threadId, text);
+    },
+    codexInterrupt: async (id, threadId) => {
+      const { backend, cwd } = await codexTarget(id);
+      return backend.interrupt(cwd, threadId);
+    },
+    codexAnswer: async (id, threadId, approvalId, answer) => {
+      const { backend, cwd } = await codexTarget(id);
+      return backend.answer(cwd, threadId, approvalId, answer);
+    },
     info: () => ({ platform: process.platform, version: app.getVersion(), demo }),
     localeState: () => localeState(),
     setLocalePreference: preference => setLocalePreference(preference),
@@ -590,7 +647,7 @@ async function boot() {
     ipcMain.handle(`lectern:${name}`, (event, ...args) => {
       if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('Untrusted IPC sender');
       // Record method/context only. Argument bodies may contain prompts or credentials.
-      if (name === 'reportRendererDiagnostic') return handler(...args);
+      if (name === 'reportRendererDiagnostic' || name === 'codexWorkspace') return handler(...args);
       const sessionMethods = new Set(['closeSession', 'resumeSession', 'forkSession', 'renameSession', 'bindSession', 'watchSession', 'loadEarlierMessages', 'readHandoffHistory', 'releaseHandoffHistory', 'listSubagents', 'readSubagent', 'readTaskOutput', 'releaseTaskOutputs', 'releaseSubagents', 'answerQuestion', 'answerPermission', 'turnAction', 'sendMessage', 'sendKey', 'setTerminalControl', 'sendTerminalInput', 'getSessionSetting', 'setSessionSetting', 'getDirectoryTrust', 'respondDirectoryTrust', 'setUltracode']);
       return diagnostic.operation(`ipc.${name}`, {
         workspaceId: typeof args[0] === 'string' && ['discover', 'createSession', 'removeWorkspace', ...sessionMethods].includes(name) ? args[0] : undefined,
@@ -639,7 +696,7 @@ app.on('before-quit', event => {
   if (shutdownState === 'cleaning') return;
   if (!quitFlow) return shutDown();
   const reason: QuitReason = systemEnding ? 'system' : installerRecent() ? 'installer' : 'user';
-  quitFlow.request(reason);
+  void requestQuit(reason);
 });
 process.on('uncaughtException', error => {
   diagnostic.event('process.uncaught_exception', { error: errorDetails(error) }, 'error');

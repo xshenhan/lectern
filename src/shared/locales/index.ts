@@ -5,6 +5,7 @@ import { artifacts } from './artifacts';
 import { backend } from './backend';
 import { cards } from './cards';
 import { chat } from './chat';
+import { codex } from './codex';
 import { composer } from './composer';
 import { controller } from './controller';
 import { core } from './core';
@@ -32,6 +33,7 @@ export const dictionaries = {
   backend,
   cards,
   chat,
+  codex,
   composer,
   controller,
   core,

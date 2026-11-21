@@ -10,6 +10,11 @@ ipcRenderer.on('lectern:menu-action', (_event, action: MenuAction) => {
   else menuListeners.forEach(listener => listener(action));
 });
 const api: DesktopAPI = {
+  codexWorkspace: (id, thread) => ipcRenderer.invoke('lectern:codexWorkspace', id, thread),
+  codexCreate: id => ipcRenderer.invoke('lectern:codexCreate', id),
+  codexSend: (id, thread, text) => ipcRenderer.invoke('lectern:codexSend', id, thread, text),
+  codexInterrupt: (id, thread) => ipcRenderer.invoke('lectern:codexInterrupt', id, thread),
+  codexAnswer: (id, thread, approval, decision) => ipcRenderer.invoke('lectern:codexAnswer', id, thread, approval, decision),
   onWindowReadable: callback => {
     // Subscribe first: a late initial response must not undo a newer blur/hide.
     let initial = true;

@@ -99,6 +99,10 @@ Lectern checks for new versions after it starts and every few hours (Settings â€
 4. Click the folder icon next to a machine to add a project folder on it.
 5. Start a conversation with **New conversation** (âŒ˜N or Ctrl+N), or open a past one and click **Resume**.
 
+Use **Sort conversations** in the sidebar to switch between last updated and conversation priority. Priority puts chats that need attention or are active above history.
+
+On macOS or Linux, install the [Codex CLI](https://developers.openai.com/codex/cli/) and sign in with `codex login`. Select a local folder and click **Codex** in the chat toolbar to start or continue Codex chats created in Lectern. The panel supports streaming replies, stopping a turn, and approving or declining commands and file changes. Closing the panel keeps replies running. Quitting Lectern interrupts active Codex replies.
+
 An SSH host alias is the usual OpenSSH configuration, for example:
 
 ```sshconfig

@@ -92,6 +92,7 @@ import { confirmAction, ContextMenuHost, showToast } from "./ContextMenu";
 import { closeConfirmation } from "./close-confirmation";
 import type { SidebarMenuActions } from "./sidebar-menus";
 import { HandoffHistoryDialog } from "./HandoffHistoryDialog";
+import { CodexPanel } from "./CodexPanel";
 import { findImportedWorkspace } from "./history-import";
 import {
   reportActionError,
@@ -244,6 +245,7 @@ export default function App({view = "primary"}: {view?: ChatView}) {
     Workspace | { machine: WorkspaceMachine } | null
   >(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [codexWorkspaceId, setCodexWorkspaceId] = useState<string>();
   const [bindingOpen, setBindingOpen] = useState(false);
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const sidebarOpen = primary && prefs.sidebarOpen;
@@ -1360,6 +1362,9 @@ export default function App({view = "primary"}: {view?: ChatView}) {
           </div>
           <div className="topbar-actions">
             <SplitButtons view={view} alternative={alternativeSession}/>
+            {!info.demo && workspace?.kind === "local" && <button type="button" className="toolbar-button"
+              title={t('codex.open')} aria-label={t('codex.open')} aria-haspopup="dialog"
+              onClick={() => setCodexWorkspaceId(workspace.id)}>Codex</button>}
             {hasHandoff && <button type="button" className="toolbar-button" aria-label={t('app.handoff')} title={t('app.handoffTitle')} aria-haspopup="dialog"
               onClick={() => setHandoffScope(activityScope)}><History size={16} /><span>{t('app.handoff')}</span></button>}
             {sessionId && <button className={`toolbar-button${activityShown ? " selected" : ""}`} title={t('app.activityTitle')} aria-label={t('app.activityTitle')} aria-expanded={activityShown}
@@ -1812,6 +1817,8 @@ export default function App({view = "primary"}: {view?: ChatView}) {
         onBack={() => setArtifact(previous => previous && previous.trail.length > 1 ? { ...previous, trail: previous.trail.slice(0, -1) } : previous)} />}
       </SplitWorkspace>
       </div>
+      {!info.demo && codexWorkspaceId && workspace?.kind === "local" && workspace.id === codexWorkspaceId &&
+        <CodexPanel key={workspace.id} workspace={workspace} sort={prefs.sidebarSort} onClose={() => setCodexWorkspaceId(undefined)} />}
       {handoffOpen && workspace && session?.historySourceIds?.length ? <HandoffHistoryDialog key={activityScope} workspace={workspace} tipId={sessionId} view={view}
         sources={session.historySourceIds} replyDetail={prefs.replyDetail} sizeMiB={prefs.historyPageMiB} onClose={() => setHandoffScope(undefined)} /> : null}
       {workspaceModal && !info.demo && (
