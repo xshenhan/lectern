@@ -4,8 +4,7 @@ name: claude-code-compat
 # computed from the npm registry at run time (scripts/cc-matrix/versions.mjs), so
 # every run picks up new releases and the current latest and stable dist-tags.
 #
-# It runs when release.yml calls it for a pushed v* tag (the release only
-# publishes if every version passes) or by hand from the Actions tab.
+# Called by the pull request and release workflows, and available for manual runs.
 on:
   workflow_call:
     inputs:
@@ -93,6 +92,7 @@ jobs:
         with:
           name: cc-matrix-${{ matrix.version }}
           path: test-results/cc-matrix/
+          overwrite: true
           retention-days: 14
 
   report:
@@ -115,3 +115,4 @@ jobs:
         with:
           name: cc-matrix-report
           path: test-results/cc-matrix/
+          overwrite: true
