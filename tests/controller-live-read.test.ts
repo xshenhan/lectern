@@ -73,8 +73,8 @@ test('an immediate read requested during a read waits for it, so a record being 
   } finally {
     holding = false;
     while (held.length) held.shift()!.release();
-    controller.unwatchSession();
-    await backend.dispose();
+    // Wait for the controller's background model probe to release the fixture.
+    await controller.dispose();
     await rm(root, { recursive: true, force: true });
   }
 });
