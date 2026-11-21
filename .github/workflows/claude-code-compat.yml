@@ -78,6 +78,14 @@ jobs:
       # Ubuntu 24.04 confines unprivileged user namespaces, which Chromium's sandbox needs.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - run: npm ci
+      - name: Install the Electron binary
+        # Electron otherwise downloads on the first Playwright launch.
+        run: |
+          for delay in 2 5; do
+            npm exec --no -- install-electron && exit 0
+            sleep "$delay"
+          done
+          npm exec --no -- install-electron
       - uses: actions/cache@v6
         with:
           path: ${{ env.CC_MATRIX_CACHE }}/${{ matrix.version }}
