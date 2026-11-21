@@ -1,6 +1,8 @@
 name: Pull request
 
 on:
+  push:
+    branches: [codex/pr-validation-047121f]
   pull_request:
   merge_group:
     types: [checks_requested]
