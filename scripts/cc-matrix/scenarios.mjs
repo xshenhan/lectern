@@ -764,7 +764,9 @@ export const SCENARIOS = [
         await page.locator(sel.turnAction).nth(1).click();
         await ui.waitReply('ccm-steered-done', { timeout: 60_000 });
         const slowB = api.requests.find(r => r.script === 'slow-b'), steered = api.requests.find(r => r.script === 'steered');
-        assert.ok(slowB.aborted || steered.at < slowB.done, 'the steering message went out before the reply finished');
+        assert.ok(slowB?.stream && steered, 'the API received both the streaming and steering requests');
+        // The steered reply can arrive while the fake API is still settling the old stream.
+        assert.ok(slowB.done === undefined || slowB.aborted || steered.at < slowB.done, 'the steering message went out before the reply finished');
       });
       await check('interrupt', async () => {
         await ui.waitStatus('idle', 60_000);
