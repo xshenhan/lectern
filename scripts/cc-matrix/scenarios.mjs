@@ -1141,7 +1141,9 @@ export const SCENARIOS = [
         await page.reload();
         await ui.waitReply('ccm-sa-filler-done', { timeout: 30_000 });
         await page.locator('.history-page-control button').waitFor({ timeout: 30_000 });
-        assert.equal(await page.locator(`${sel.user}:has-text("Launch two more helpers")`).count(), 0, 'their launch is not on the first page');
+        // The old live snapshot can render before the fresh page arrives after reload.
+        const launch = page.locator(`.conversation-scroll ${sel.user}:has-text("Launch two more helpers")`);
+        await launch.waitFor({ state: 'detached', timeout: 30_000 });
         if (!await page.locator('.activity-float').isVisible()) await page.locator(sel.activityPill).click();
         const section = page.locator('.activity-float-section').filter({ has: page.locator('.activity-float-title', { hasText: '子代理' }) });
         await section.waitFor({ timeout: 20_000 });
@@ -1154,7 +1156,7 @@ export const SCENARIOS = [
         note('listed', listed);
         assert.deepEqual(listed.map(([agent, state]) => [agent, state]), [[more.held, 'running'], [more.quick, 'completed'], [agentId, 'completed']], 'all three, running first, newest first');
         assert.ok(listed.every(([, , label]) => label !== '较早'), 'none is "earlier"');
-        assert.equal(await page.locator(`${sel.user}:has-text("Launch two more helpers")`).count(), 0, 'still not loaded');
+        assert.equal(await launch.count(), 0, 'their launch is still not loaded');
         await page.screenshot({ path: path.join(ctx.dir, 'subagents.listed.png') }).catch(() => {});
       });
       await check('subagent-process-gone', async () => {
