@@ -1,5 +1,4 @@
 # Lectern release: push a tag vX.Y.Z whose version matches package.json.
-# Pushing a tag is the only automatic trigger of any workflow in this repository.
 # The run first calls the full tests (ci.yml) and the Claude Code compatibility
 # matrix (claude-code-compat.yml); only when both pass does it build installers on
 # macOS (DMG/ZIP, arm64 and x64), Windows (NSIS x64) and Linux (AppImage and DEB

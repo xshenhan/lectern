@@ -85,8 +85,9 @@ Regenerate them when the interface changes noticeably, look at every picture bef
 
 - Keep each pull request to one topic and rebase it on the current `main`.
 - Write commit messages that say what changed and why, in English, with a short first line.
-- In the pull request, describe the change, list the tests you ran (pushes and pull requests do not start CI by themselves), and add before/after screenshots for interface changes.
-- Make sure `npm run typecheck`, the related tests and `node scripts/check-private-info.mjs` pass.
+- In the pull request, describe the change, list the tests you ran, and add before/after screenshots for interface changes.
+- Make sure `Full PR validation` passes before merging. It covers the full offline test suite, the Claude Code compatibility matrix, and release installer builds and smoke tests for Linux, Windows and both Mac architectures.
+- Download the Apple Silicon or Intel DMG from the Actions run summary. PR builds use an ad hoc signature without Apple notarization. Installers and checksums are retained for 30 days.
 - Do not change the version number, the release workflow or signing settings in a feature pull request.
 
 ## Reporting bugs
