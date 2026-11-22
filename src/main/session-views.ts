@@ -1,4 +1,4 @@
-import type { SessionSnapshot, ChatView, TerminalFrameEvent } from '../shared/types';
+import type { SessionSnapshot, ChatView, SidebarStatusUpdate, TerminalFrameEvent } from '../shared/types';
 import { Controller } from './controller';
 import { t } from '../shared/i18n';
 
@@ -9,6 +9,7 @@ interface Reader {
   terminals: Set<ChatView>;
   opening?: Promise<SessionSnapshot>;
   shownAt: number;
+  sidebarStatus?: SidebarStatusUpdate;
   /** Read ahead because the user pointed at it; not shown yet. */
   speculative?: boolean;
 }
@@ -28,7 +29,8 @@ export class SessionViews {
   private clock = 0;
 
   constructor(private readonly primary: Controller, private readonly emit: (snapshot: SessionSnapshot) => void,
-    private readonly emitFrame: (event: TerminalFrameEvent) => void = () => {}) {}
+    private readonly emitFrame: (event: TerminalFrameEvent) => void = () => {},
+    private readonly emitSidebarStatus: (update: SidebarStatusUpdate) => void = () => {}) {}
 
   private view(value: ChatView): ChatView {
     if (value !== 'primary' && value !== 'secondary') throw new Error(t('main.unknownSplit'));
@@ -75,10 +77,30 @@ export class SessionViews {
     else reader.terminals.delete(view);
     reader.controller.setTerminalVisible(workspace, session, reader.terminals.size > 0);
   }
+  private updateSidebarStatus(reader: Reader, snapshot: SessionSnapshot) {
+    if (this.readers.get(reader.key) !== reader) return;
+    const { workspaceId, sessionId, paneId, status, navigationStatus, navigationStatusDetail, background, error } = snapshot;
+    if (reader.key !== key(workspaceId, sessionId)) return;
+    const observation = paneId && status !== 'connecting' && status !== 'offline'
+      ? { paneId, status, navigationStatus, navigationStatusDetail, background, error } : undefined;
+    const previous = reader.sidebarStatus?.observation;
+    if (previous?.paneId === observation?.paneId && previous?.status === observation?.status &&
+        previous?.navigationStatus === observation?.navigationStatus &&
+        previous?.navigationStatusDetail === observation?.navigationStatusDetail &&
+        previous?.background === observation?.background && previous?.error === observation?.error) return;
+    const update = { workspaceId, sessionId, observation };
+    reader.sidebarStatus = observation ? update : undefined;
+    this.emitSidebarStatus(update);
+  }
+  /** Renderer reloads can subscribe after a reader's last status change. */
+  replaySidebarStatus() {
+    for (const reader of this.readers.values()) if (reader.sidebarStatus) this.emitSidebarStatus(reader.sidebarStatus);
+  }
   private create(workspace: string, session: string, background: boolean) {
     const controller = this.primary.sibling();
     const reader: Reader = { key: key(workspace, session), controller, views: new Set(), terminals: new Set(), shownAt: ++this.clock };
     controller.on('snapshot', (snapshot: SessionSnapshot) => { if (reader.views.size) this.emit(snapshot); });
+    controller.on('sidebar-status', (snapshot: SessionSnapshot) => this.updateSidebarStatus(reader, snapshot));
     controller.on('terminal-frame', (event: TerminalFrameEvent) => { if (reader.views.size) this.emitFrame(event); });
     controller.setBackground(background);
     this.readers.set(reader.key, reader);
@@ -139,6 +161,10 @@ export class SessionViews {
   private forget(reader: Reader) {
     if (this.readers.get(reader.key) !== reader) return;
     this.readers.delete(reader.key);
+    if (reader.sidebarStatus) {
+      const { workspaceId, sessionId } = reader.sidebarStatus;
+      this.emitSidebarStatus({ workspaceId, sessionId });
+    }
     void reader.controller.detach();
   }
   // Evict the least recently shown cached conversations, saved history first.

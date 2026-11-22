@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { DesktopAPI, LocaleState, MenuAction, SessionSnapshot, SshLoginPrompt, TerminalFrameEvent } from '../shared/types';
+import type { DesktopAPI, LocaleState, MenuAction, SessionSnapshot, SidebarStatusUpdate, SshLoginPrompt, TerminalFrameEvent } from '../shared/types';
 import type { UpdateState } from '../shared/update-check';
 import type { QuitPrompt } from '../shared/quit';
 // macOS can reopen a closed window from its menu before React mounts.
@@ -123,6 +123,12 @@ const api: DesktopAPI = {
     const listener = (_: Electron.IpcRendererEvent, snapshot: SessionSnapshot) => callback(snapshot);
     ipcRenderer.on('lectern:snapshot', listener);
     return () => { ipcRenderer.removeListener('lectern:snapshot', listener); };
+  },
+  onSidebarStatus: callback => {
+    const listener = (_: Electron.IpcRendererEvent, update: SidebarStatusUpdate) => callback(update);
+    ipcRenderer.on('lectern:sidebar-status', listener);
+    void ipcRenderer.invoke('lectern:replaySidebarStatus').catch(() => {});
+    return () => { ipcRenderer.removeListener('lectern:sidebar-status', listener); };
   },
   updateState: () => ipcRenderer.invoke('lectern:updateState'),
   checkForUpdates: () => ipcRenderer.invoke('lectern:checkForUpdates'),

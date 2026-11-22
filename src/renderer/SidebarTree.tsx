@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { workspaceMachines, type WorkspaceMachine } from "./workspace-machines";
 import { Laptop, FolderPlus, LogIn } from "lucide-react";
 import "./machine-tree.css";
@@ -17,10 +17,10 @@ import {
   RefreshCw,
   Server,
 } from "lucide-react";
-import type { SessionInfo, SessionSnapshot, Workspace } from "../shared/types";
+import type { SessionInfo, SessionSnapshot, SidebarStatusObservation, Workspace } from "../shared/types";
 import { SessionRenameDialog } from "./SessionRenameDialog";
 import type { WorkspaceDiscoveryState } from "./workspace-discovery-cache";
-import { aggregateSidebarState, compareSidebarSessions, sessionSidebarState } from "./sidebar-status";
+import { aggregateSidebarState, compareActiveSidebarSessions, compareSidebarSessions, isActiveSidebarSession, sessionSidebarState, type SidebarSessionState } from "./sidebar-status";
 import { showContextMenu } from "./ContextMenu";
 import { folderMenu, machineMenu, sessionMenu, type SidebarMenuActions } from "./sidebar-menus";
 import { HoverPrefetch } from "./sidebar-prefetch";
@@ -31,14 +31,15 @@ import { needsSshLogin } from "./ssh-login";
 import { t } from '../shared/i18n';
 
 const initialSessions = 5, moreSessions = 10;
-const sortLabels = { recent: 'sidebar.sortRecent', priority: 'sidebar.sortPriority' } as const;
+const globalPageSize = 25;
+const sortLabels = { projects: 'sidebar.sortProjects', recent: 'sidebar.sortRecent', priority: 'sidebar.sortPriority' } as const;
 
 export function SidebarSortButton({ mode }: { mode: SidebarSortMode }) {
   const label = t('sidebar.sortConversations');
   const current = t(sortLabels[mode]);
   return <button type="button" className="icon-button" aria-label={label} aria-description={current}
     aria-haspopup="menu" title={t('sidebar.sortCurrent', { mode: current })}
-    onClick={event => showContextMenu(event, (['recent', 'priority'] as const).map(sort => ({
+    onClick={event => showContextMenu(event, (['projects', 'recent', 'priority'] as const).map(sort => ({
       label: t(sortLabels[sort]), icon: sort === mode ? <Check size={14} /> : undefined,
       onSelect: () => setDesktop({ sidebarSort: sort }),
     })), label)}>
@@ -88,6 +89,87 @@ function MachineSection({ machine, searchOpen, demo, add, login, menu, connectio
 const hoverPrefetch = new HoverPrefetch((workspaceId, sessionId) => {
   void window.desktop.prefetchSession?.(workspaceId, sessionId).catch(() => { /* Opening reads it normally. */ });
 });
+
+function repeatedTitles(sessions: readonly SessionInfo[]) {
+  const seen = new Set<string>(), duplicates = new Set<string>();
+  for (const { title } of sessions) {
+    if (seen.has(title)) duplicates.add(title);
+    seen.add(title);
+  }
+  return duplicates;
+}
+
+function SessionRow({ workspace, session, state, duplicate, selected, origin, onSelect, onRename, menuActions }: {
+  workspace: Workspace;
+  session: SessionInfo;
+  state: SidebarSessionState;
+  duplicate: boolean;
+  selected: boolean;
+  origin?: string;
+  onSelect(workspace: Workspace, id: string): void;
+  onRename(target: { workspaceId: string; session: SessionInfo }): void;
+  menuActions?: SidebarMenuActions;
+}) {
+  const title = session.title || t('app.newChat');
+  const identity = [session.historySegmentCount && t('sidebar.segments', { count: session.historySegmentCount }),
+    session.forkParentId && t('sidebar.branch'), duplicate && session.id.slice(0, 8)].filter(Boolean).join(' ');
+  const rename = () => onRename({ workspaceId: workspace.id, session });
+  const titleText = `${session.titleSource === "prompt" ? t('sidebar.firstMessage') : ""}${title}`;
+  const branch = session.forkParentId && t('sidebar.branchFrom', { id: session.forkParentId });
+  const waitingFirstRecord = session.paneId && !session.path && t('sidebar.waitingFirstRecord');
+  return (
+    <div className="session-row-wrap">
+      <button
+        className={`session-row${selected ? " active" : ""}`}
+        draggable
+        onDragStart={event => beginChatDrag(event.dataTransfer, { workspaceId: workspace.id, sessionId: session.id, title })}
+        onDragEnd={endChatDrag}
+        onClick={() => { hoverPrefetch.leave(); onSelect(workspace, session.id); }}
+        onMouseEnter={() => { if (!selected) hoverPrefetch.point(workspace.id, session.id); }}
+        onFocus={() => { if (!selected) hoverPrefetch.point(workspace.id, session.id); }}
+        onMouseLeave={() => hoverPrefetch.leave()}
+        onBlur={() => hoverPrefetch.leave()}
+        onContextMenu={menuActions && (event => showContextMenu(event, sessionMenu(workspace, session, { ...menuActions, rename }), title))}
+        aria-keyshortcuts="F2"
+        onKeyDown={event => {
+          if (event.key === "F2") {
+            event.preventDefault();
+            rename();
+          }
+        }}
+        aria-current={selected ? "page" : undefined}
+        aria-label={[title, identity, origin, state.label, state.loading && t('sidebar.loading')].filter(Boolean).join(t('sidebar.ariaJoin'))}
+        aria-busy={state.loading || undefined}
+        title={[titleText, origin, session.id, branch, state.detail, waitingFirstRecord].filter(Boolean).join("\n")}
+        data-workspace-id={workspace.id}
+        data-session-id={session.id}
+        data-session-live={state.live}
+        data-session-persisted={!!session.path}
+        data-status={state.kind}
+        data-session-state={state.kind}
+        data-background={state.background || undefined}
+        data-loading={state.loading || undefined}
+      >
+        {origin ? <span className="session-name-and-origin">
+          <span className="session-title">{title}</span>
+          <span className="session-origin">{origin}</span>
+        </span> : <span className="session-title">{title}</span>}
+        {identity && <small>{identity}</small>}
+        <span className="session-state-label">{state.label}</span>
+        {state.dot && <span className={`session-status-dot state-${state.dot}`} aria-hidden="true" />}
+      </button>
+      <button
+        type="button"
+        className="icon-button session-rename"
+        title={t('sidebar.renameSession')}
+        aria-label={t('sidebar.renameSessionOf', { title })}
+        onClick={rename}
+      >
+        <Pencil size={13} />
+      </button>
+    </div>
+  );
+}
 
 export function SidebarTree({
   workspaces,
@@ -152,6 +234,18 @@ export function SidebarTree({
   const [rename, setRename] = useState<{ workspaceId: string; session: SessionInfo } | null>(null);
   // Each folder lists five conversations initially; Show more adds ten at a time.
   const [shown, setShown] = useState<Record<string, number>>({});
+  const [globalLimit, setGlobalLimit] = useState(globalPageSize);
+  const [observations, setObservations] = useState<ReadonlyMap<string, SidebarStatusObservation>>(() => new Map());
+  useEffect(() => window.desktop?.onSidebarStatus?.(({ workspaceId, sessionId, observation }) => {
+    const key = archiveKey(workspaceId, sessionId);
+    setObservations(current => {
+      if (!observation && !current.has(key)) return current;
+      const next = new Map(current);
+      if (observation) next.set(key, observation);
+      else next.delete(key);
+      return next;
+    });
+  }), []);
   const ordered = orderProjects(workspaces, prefs.projectOrder);
   // Archived conversations leave the sidebar; a running one always stays visible.
   const archived = useMemo(() => new Set(prefs.archivedSessions.map(a => archiveKey(a.workspaceId, a.sessionId))), [prefs.archivedSessions]);
@@ -159,14 +253,59 @@ export function SidebarTree({
   const machines = workspaceMachines(platform, demo ? [] : prefs.connections, ordered);
   const query = filter.trim().toLocaleLowerCase();
   const matches = (...values: (string | undefined)[]) => values.some(v => v?.toLocaleLowerCase().includes(query));
+  const isSelected = (workspace: Workspace, session: SessionInfo) => workspace.id === workspaceId && session.id === sessionId;
+  const visibleSnapshots = [snapshot, otherSnapshot];
+  const displayState = (workspace: Workspace, session: SessionInfo) => {
+    const entry = states[workspace.id];
+    return sessionSidebarState(session, {
+      snapshot: visibleSnapshots.find(item => item?.workspaceId === workspace.id && item.sessionId === session.id),
+      observation: observations.get(archiveKey(workspace.id, session.id)),
+      selected: isSelected(workspace, session),
+      scanError: entry?.error,
+      unread: entry?.unreadSessionIds?.has(session.id),
+    });
+  };
   const visible = machines.flatMap(machine => {
     const machineMatch = !query || matches(machine.name, machine.endpoint.host);
     const folders = machineMatch ? machine.folders : machine.folders.filter(w => matches(w.name, w.cwd) || listed(w).some(s => matches(s.title)));
     return machineMatch || folders.length ? [{ machine, folders, machineMatch }] : [];
   });
+  const flat = prefs.sidebarSort !== 'projects';
+  const priority = prefs.sidebarSort === 'priority';
+  const globalRows = flat ? visible.flatMap(({ machine, folders, machineMatch }) => folders.flatMap(workspace => {
+    const folderMatches = machineMatch || matches(workspace.name, workspace.cwd);
+    const sessions = listed(workspace), duplicates = repeatedTitles(sessions);
+    return sessions.filter(session => folderMatches || matches(session.title)).map(session => ({
+      workspace, session,
+      key: archiveKey(workspace.id, session.id),
+      origin: `${workspace.name} · ${machine.name}`,
+      state: displayState(workspace, session),
+      duplicate: duplicates.has(session.title),
+      selected: isSelected(workspace, session),
+    }));
+  })).sort(priority ? compareActiveSidebarSessions : (a, b) => compareSidebarSessions(a.session, b.session)) : [];
+  const globalPage = globalRows.filter((row, index) => index < globalLimit || row.selected);
+  const globalHidden = globalRows.length - globalPage.length;
+  const hasProgress = priority && !!globalPage[0] && isActiveSidebarSession(globalPage[0].state);
+  const firstOther = hasProgress ? globalPage.findIndex(row => !isActiveSidebarSession(row.state)) : -1;
   return (
-    <nav className="sidebar-tree" aria-label={t('sidebar.treeLabel')}>
-      {visible.map(({ machine, folders, machineMatch }) => <MachineSection key={machine.key} machine={machine}
+    <nav className="sidebar-tree" data-sidebar-sort={prefs.sidebarSort} aria-label={t(flat ? 'sidebar.allConversations' : 'sidebar.treeLabel')}>
+      {flat ? <div className="sidebar-global">
+        {globalPage.flatMap(({ key, ...row }, index) => {
+          const sessionRow = <SessionRow key={key} {...row} onSelect={onSelect} onRename={setRename} menuActions={menuActions} />;
+          if (hasProgress && index === 0) return [<h2 key="in-progress">{t('sidebar.inProgress')}</h2>, sessionRow];
+          if (index === firstOther) return [<h2 key="other-conversations">{t('sidebar.otherConversations')}</h2>, sessionRow];
+          return [sessionRow];
+        })}
+        {globalHidden > 0 && <button type="button" className="tree-more" aria-label={t('sidebar.showMoreConversations')}
+          onClick={() => setGlobalLimit(limit => limit + globalPageSize)}>
+          {t('sidebar.showMore')}<small>{t('sidebar.moreCount', { count: globalHidden })}</small>
+        </button>}
+        {!globalRows.length && <div className="tree-note">
+          <span>{t(query ? 'sidebar.noMatchingConversations' : 'sidebar.noSessions')}</span>
+          {!query && <button type="button" className="tree-note-action" onClick={() => setDesktop({ sidebarSort: 'projects' })}>{t('sidebar.sortProjects')}</button>}
+        </div>}
+      </div> : visible.map(({ machine, folders, machineMatch }) => <MachineSection key={machine.key} machine={machine}
         searchOpen={!!query} demo={demo} add={() => onAddFolder(machine)} login={onLogin && (() => onLogin(machine))} menu={menuActions}
         connection={connectionOf(machine.key)} onNavigate={onNavigateMachine && (() => onNavigateMachine(machine))}
         onOpen={onOpenMachine && (() => onOpenMachine(machine))}>
@@ -175,21 +314,12 @@ export function SidebarTree({
         const open = expanded.has(workspace.id) || !!query;
         const folderMatches = machineMatch || matches(workspace.name, workspace.cwd);
         const allSessions = listed(workspace);
-        const seenTitles = new Set<string>(), duplicateTitles = new Set<string>();
-        for (const { title } of allSessions) {
-          if (seenTitles.has(title)) duplicateTitles.add(title);
-          seenTitles.add(title);
-        }
-        const displayStates = new Map(allSessions.map(session => [session.id, sessionSidebarState(session, {
-          snapshot: [snapshot, otherSnapshot].find(item => item?.workspaceId === workspace.id && item?.sessionId === session.id),
-          selected: workspace.id === workspaceId && session.id === sessionId,
-          scanError: entry?.error, unread: entry?.unreadSessionIds?.has(session.id),
-        })]));
-        const sortStates = prefs.sidebarSort === 'priority' ? displayStates : undefined;
+        const duplicateTitles = repeatedTitles(allSessions);
+        const displayStates = new Map(allSessions.map(session => [session.id, displayState(workspace, session)]));
         const matching = allSessions.filter(chat=>!query || folderMatches || chat.title?.toLocaleLowerCase().includes(query))
-          .sort((a, b) => compareSidebarSessions(a, b, sortStates));
+          .sort(compareSidebarSessions);
         const limit = shown[workspace.id] ?? initialSessions;
-        const sessions = query ? matching : matching.filter((chat, index) => index < limit || (workspace.id === workspaceId && chat.id === sessionId));
+        const sessions = query ? matching : matching.filter((chat, index) => index < limit || isSelected(workspace, chat));
         const hidden = matching.length - sessions.length;
         const collapsible = open && !query && limit > initialSessions;
         const collapseSessions = () => setShown(current => {
@@ -288,63 +418,10 @@ export function SidebarTree({
                 role="group"
                 aria-label={t('sidebar.sessionsOf', { name: workspace.name })}
               >
-                {sessions.map(session => {
-                  const state = displayStates.get(session.id)!;
-                  const title = session.title || t('app.newChat');
-                  const identity = [session.historySegmentCount && t('sidebar.segments', { count: session.historySegmentCount }), session.forkParentId && t('sidebar.branch'),
-                    duplicateTitles.has(session.title) && session.id.slice(0, 8)].filter(Boolean).join(' ');
-                  const selected =
-                    workspace.id === workspaceId && session.id === sessionId;
-                  return (
-                    <div className="session-row-wrap" key={session.id}>
-                      <button
-                        className={`session-row${selected ? " active" : ""}`}
-                        draggable
-                        onDragStart={e=>beginChatDrag(e.dataTransfer,{workspaceId:workspace.id,sessionId:session.id,title})}
-                        onDragEnd={endChatDrag}
-                        onClick={() => { hoverPrefetch.leave(); onSelect(workspace, session.id); }}
-                        onMouseEnter={() => { if (!selected) hoverPrefetch.point(workspace.id, session.id); }}
-                        onFocus={() => { if (!selected) hoverPrefetch.point(workspace.id, session.id); }}
-                        onMouseLeave={() => hoverPrefetch.leave()}
-                        onBlur={() => hoverPrefetch.leave()}
-                        onContextMenu={menuActions && (event => showContextMenu(event, sessionMenu(workspace, session, { ...menuActions, rename: () => setRename({ workspaceId: workspace.id, session }) }), title))}
-                        aria-keyshortcuts="F2"
-                        onKeyDown={(event) => {
-                          if (event.key === "F2") {
-                            event.preventDefault();
-                            setRename({ workspaceId: workspace.id, session });
-                          }
-                        }}
-                        aria-current={selected ? "page" : undefined}
-                        aria-label={[title, identity, state.label, state.loading && t('sidebar.loading')].filter(Boolean).join(t('sidebar.ariaJoin'))}
-                        aria-busy={state.loading || undefined}
-                        title={`${session.titleSource === "prompt" ? t('sidebar.firstMessage') : ""}${title}\n${session.id}${session.forkParentId ? `\n${t('sidebar.branchFrom', { id: session.forkParentId })}` : ''}\n${state.detail}${session.paneId && !session.path ? "\n" + t('sidebar.waitingFirstRecord') : ""}`}
-                        data-workspace-id={workspace.id}
-                        data-session-id={session.id}
-                        data-session-live={state.live}
-                        data-session-persisted={!!session.path}
-                        data-status={state.kind}
-                        data-session-state={state.kind}
-                        data-background={state.background || undefined}
-                        data-loading={state.loading || undefined}
-                      >
-                        <span className="session-title">{title}</span>
-                        {identity && <small>{identity}</small>}
-                        <span className="session-state-label">{state.label}</span>
-                        {state.dot && <span className={`session-status-dot state-${state.dot}`} aria-hidden="true" />}
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-button session-rename"
-                        title={t('sidebar.renameSession')}
-                        aria-label={t('sidebar.renameSessionOf', { title })}
-                        onClick={() => setRename({ workspaceId: workspace.id, session })}
-                      >
-                        <Pencil size={13} />
-                      </button>
-                    </div>
-                  );
-                })}
+                {sessions.map(session => <SessionRow key={session.id}
+                  workspace={workspace} session={session} state={displayStates.get(session.id)!}
+                  duplicate={duplicateTitles.has(session.title)} selected={isSelected(workspace, session)}
+                  onSelect={onSelect} onRename={setRename} menuActions={menuActions} />)}
                 {(hidden > 0 || collapsible) && <div className="tree-more-row">
                   {hidden > 0 && (
                     <button type="button" className="tree-more" aria-label={t('sidebar.showMoreOf', { name: workspace.name })}
@@ -403,7 +480,7 @@ export function SidebarTree({
           </div>
         );
       })}</MachineSection>)}
-      {query && !visible.length && <div className="tree-empty">{t('sidebar.noMatches')}</div>}
+      {!flat && query && !visible.length && <div className="tree-empty">{t('sidebar.noMatches')}</div>}
       {rename && (
         <SessionRenameDialog
           session={rename.session}

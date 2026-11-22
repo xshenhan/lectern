@@ -544,6 +544,7 @@ async function boot() {
       for (const session of discovery.sessions.filter(s => s.paneId).slice(0, 6)) controllers.prefetch(id, session.id);
       return discovery;
     },
+    replaySidebarStatus: () => controllers.replaySidebarStatus(),
     createSession: (id, options) => controller.createSession(id, options ?? {}),
     renameSession: (id, sid, title) => controllers.renameSession(id, sid, title),
     setTerminalVisible: (id, sid, visible, view) => controllers.setTerminalVisible(id, sid, visible, view),
@@ -599,7 +600,8 @@ async function boot() {
     });
   }
   controllers = new SessionViews(controller, (snapshot: SessionSnapshot) => window?.webContents.send('lectern:snapshot', snapshot),
-    frame => window?.webContents.send('lectern:terminal-frame', frame));
+    frame => window?.webContents.send('lectern:terminal-frame', frame),
+    update => window?.webContents.send('lectern:sidebar-status', update));
   const onMenuAction = (action: MenuAction) => {
     if (!window) {
       const opened = createWindow();

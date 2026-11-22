@@ -375,6 +375,14 @@ export interface SessionSnapshot {
   /** Recoverable parser/mapping notices. */
   notice?: string;
 }
+/** The sidebar can use a live reader without sending an off-screen transcript. */
+export type SidebarStatusObservation = Pick<SessionSnapshot, 'status' | 'paneId' |
+  'navigationStatus' | 'navigationStatusDetail' | 'background' | 'error'>;
+export interface SidebarStatusUpdate {
+  workspaceId: string;
+  sessionId: string;
+  observation?: SidebarStatusObservation;
+}
 export interface WorkspaceDiscovery {
   workspace: Workspace;
   sessions: SessionInfo[];
@@ -578,6 +586,7 @@ export interface DesktopAPI {
    * sessions); 'menu' picks in the native menu for this session only. */
   setSessionSetting(workspaceId: string, sessionId: string, token: string, optionId: string, mode?: SettingSwitchMode): Promise<SessionSettingSnapshot>;
   onSnapshot(callback: (snapshot: SessionSnapshot) => void): () => void;
+  onSidebarStatus(callback: (update: SidebarStatusUpdate) => void): () => void;
   /** Update check (src/main/updates.ts): state, actions and pushed changes. */
   updateState(): Promise<UpdateState>;
   checkForUpdates(): Promise<UpdateState>;

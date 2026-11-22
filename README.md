@@ -41,7 +41,7 @@ Nothing extra is installed on the remote machine. Claude Code there keeps its ow
 - **Update check.** Lectern looks for new releases on GitHub and asks before downloading. Downloads are verified against `SHA256SUMS` and never installed automatically.
 - **English and Simplified Chinese.** Lectern follows the system language; switch it any time in Settings › Appearance.
 - **Private.** No telemetry. Apart from the update check on GitHub, Lectern only talks to your own machines. Lectern does not read Claude credentials, and remote images in Markdown are not loaded.
-- **Conversation sorting.** Switch between last updated and conversation priority in the sidebar. Priority puts chats that need attention or are active above history.
+- **Conversation sorting.** Browse chats by project, or sort chats across all local and SSH projects by last update. The active-first view puts replies, confirmations, and background work ahead of other chats.
 
 ## Screenshots
 

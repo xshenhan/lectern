@@ -500,10 +500,12 @@ export class Controller extends EventEmitter {
     if (this.watch) {
       this.revokeTerminalControl(this.watch, 'watch-stopped');
       diagnostic.event('controller.watch.stop', { watchId: this.watch.id, workspaceId: this.watch.workspace.id, sessionId: this.watch.sessionId });
+      this.emit('sidebar-status', { ...this.watch.snapshot, paneId: undefined });
     }
     this.watch = undefined;
   }
   private publish(watch: Watch, reason: string, inactiveFilter = false): void {
+    this.emit('sidebar-status', watch.snapshot);
     if (this.background) return;
     // The digests below exist only for the diagnostics log. Hashing a long
     // conversation costs ~15 ms of main-process time on every poll.

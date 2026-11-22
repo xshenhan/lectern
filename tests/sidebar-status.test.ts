@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { aggregateSidebarState, compareSidebarSessions, sessionSidebarState } from '../src/renderer/sidebar-status';
+import { aggregateSidebarState, compareActiveSidebarSessions, compareSidebarSessions, isActiveSidebarSession, sessionSidebarState } from '../src/renderer/sidebar-status';
 import { loadDesktopState } from '../src/renderer/desktop-state';
 import { ReplyReceipts } from '../src/renderer/sidebar-receipts';
 import { completedReplyOffset } from '../src/core/reply-completion';
@@ -44,7 +44,34 @@ test('optimistic work and permission waiting override an older idle navigation o
   }
 });
 
-test('sidebar sorting keeps recency by default and can bring actionable or active chats forward', () => {
+test('offscreen observations preserve and clear working status only for the bound pane', () => {
+  const live = { ...session, paneId: '%1', status: 'idle' as const };
+  const observation = { paneId: '%1', status: 'working' as const, navigationStatus: 'idle' as const };
+  const offscreen = sessionSidebarState(live, { observation });
+  assert.equal(offscreen.kind, 'working');
+  assert.equal(offscreen.dot, 'working');
+  for (const current of [undefined, { ...snapshot, status: 'connecting' as const }]) {
+    const opening = sessionSidebarState(live, { observation, selected: true, snapshot: current });
+    assert.equal(opening.kind, 'working');
+    assert.equal(opening.loading, true);
+  }
+  assert.equal(sessionSidebarState({ ...live, paneId: '%2' }, { observation }).kind, 'idle');
+  assert.equal(sessionSidebarState({ ...live, paneId: undefined, status: 'history' }, { observation }).kind, 'history');
+  assert.equal(sessionSidebarState(live, { observation, scanError: 'SSH disconnected' }).kind, 'unknown');
+  assert.equal(sessionSidebarState(live, { observation, snapshot }).kind, 'history');
+  const replyingWithUnread = sessionSidebarState(live, { observation, unread: true });
+  assert.equal(replyingWithUnread.label, offscreen.label);
+  assert.equal(replyingWithUnread.dot, 'unread');
+  assert.ok(replyingWithUnread.detail.includes(offscreen.detail));
+  const finishedWithUnread = sessionSidebarState({ ...live, status: 'working' }, {
+    observation: { ...observation, status: 'idle' }, unread: true,
+  });
+  assert.equal(finishedWithUnread.kind, 'idle');
+  assert.equal(finishedWithUnread.dot, 'unread');
+  assert.notEqual(finishedWithUnread.label, offscreen.label);
+});
+
+test('global sorting ranks all in-progress conversations before other chats and orders both groups by recency', () => {
   const updatedAt = (day: string) => `2026-01-${day}T00:00:00.000Z`;
   const chats: SessionInfo[] = [
     { ...session, id: 'new', paneId: '%1', status: 'idle' },
@@ -55,30 +82,35 @@ test('sidebar sorting keeps recency by default and can bring actionable or activ
     { ...session, id: 'error', updatedAt: updatedAt('04'), status: 'error' },
     { ...session, id: 'waiting', updatedAt: updatedAt('03'), paneId: '%4', status: 'waiting' },
   ];
-  const states = new Map(chats.map(chat => [chat.id, sessionSidebarState(chat, { unread: chat.id === 'unread' })]));
+  const rows = chats.map(session => ({ session, state: sessionSidebarState(session, { unread: session.id === 'unread' }) }));
   assert.deepEqual([...chats].reverse().sort(compareSidebarSessions).map(chat => chat.id),
     ['new', 'history', 'unread', 'background', 'working', 'error', 'waiting']);
-  assert.deepEqual([...chats].reverse().sort((a, b) => compareSidebarSessions(a, b, states)).map(chat => chat.id),
-    ['error', 'waiting', 'unread', 'background', 'working', 'new', 'history']);
+  assert.deepEqual([...rows].reverse().sort(compareActiveSidebarSessions).map(row => row.session.id),
+    ['background', 'working', 'waiting', 'new', 'history', 'unread', 'error']);
+  assert.equal(isActiveSidebarSession(sessionSidebarState({ ...session, id: 'working', status: 'idle' })), false);
 });
 
-test('sidebar sort preference supports existing profiles and remembers priority', () => {
+test('sidebar sort preference defaults to projects and preserves the existing recent and priority preferences', () => {
   const read = (value: object) => loadDesktopState({ getItem: () => JSON.stringify(value) }).sidebarSort;
-  assert.equal(read({}), 'recent');
-  assert.equal(read({ sidebarSort: 'invalid' }), 'recent');
+  assert.equal(read({}), 'projects');
+  assert.equal(read({ sidebarSort: 'invalid' }), 'projects');
+  assert.equal(read({ sidebarSort: 'projects' }), 'projects');
+  assert.equal(read({ sidebarSort: 'recent' }), 'recent');
   assert.equal(read({ sidebarSort: 'priority' }), 'priority');
 });
 
-test('sidebar sorting preserves discovery order when recency and priority tie', () => {
+test('sidebar sorting preserves discovery order when recency and activity tie across projects', () => {
   const updatedAt = '2026-01-01T00:00:00.000Z';
   const chats: SessionInfo[] = [
     { ...session, id: 'z-history', updatedAt },
     { ...session, id: 'a-history', updatedAt },
-    { ...session, id: 'active', updatedAt, paneId: '%1', status: 'idle' },
+    { ...session, id: 'active', updatedAt, paneId: '%1', status: 'working' },
   ];
-  const states = new Map(chats.map(chat => [chat.id, sessionSidebarState(chat)]));
+  const rows = chats.map(session => ({ session, state: sessionSidebarState(session) }));
   assert.deepEqual([...chats].sort(compareSidebarSessions).map(chat => chat.id), ['z-history', 'a-history', 'active']);
-  assert.deepEqual([...chats].sort((a, b) => compareSidebarSessions(a, b, states)).map(chat => chat.id), ['active', 'z-history', 'a-history']);
+  assert.deepEqual(rows.sort(compareActiveSidebarSessions).map(row => row.session.id), ['active', 'z-history', 'a-history']);
+  const sharedId = rows.map(row => ({ ...row, session: { ...row.session, id: 'same-id' } }));
+  assert.equal(sharedId.reverse().sort(compareActiveSidebarSessions)[0]?.state.kind, 'working');
 });
 
 test('folder aggregation prioritizes actionable failures and waiting over idle or saved history', () => {

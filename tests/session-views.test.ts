@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { SessionViews } from '../src/main/session-views';
 import type { Controller } from '../src/main/controller';
-import type { SessionSnapshot } from '../src/shared/types';
+import type { SessionSnapshot, SidebarStatusUpdate } from '../src/shared/types';
 
 class Reader extends EventEmitter {
   currentSnapshot?: SessionSnapshot;
@@ -91,6 +91,48 @@ test('switching back reuses the cached conversation; reopening it in place reloa
   assert.equal(c.currentSnapshot?.sessionId, 'c');
   views.releaseWorkspace('w');
   assert.ok(primary.created.every(r => r.detached));
+});
+
+test('sidebar observations survive navigation, stay isolated, and clear when the reader can no longer report', async () => {
+  const primary = new Reader(), updates: SidebarStatusUpdate[] = [], transcripts: SessionSnapshot[] = [];
+  const views = new SessionViews(primary as unknown as Controller, snapshot => transcripts.push(snapshot), undefined,
+    update => updates.push(update));
+  const publish = (reader: Reader, status: SessionSnapshot['status']) => {
+    reader.currentSnapshot = { ...reader.currentSnapshot!, paneId: '%1', status, screen: 'transcript fixture' };
+    reader.emit('sidebar-status', reader.currentSnapshot);
+  };
+  const statuses = () => updates.map(({ workspaceId, sessionId, observation }) =>
+    [workspaceId, sessionId, observation?.paneId, observation?.status]);
+
+  await views.watch('first', 'same-id', 'primary');
+  const first = primary.created[0];
+  publish(first, 'working');
+  publish(first, 'working');
+  await views.watch('second', 'same-id', 'primary');
+  const second = primary.created[1];
+  publish(second, 'waiting');
+  publish(first, 'idle');
+  assert.deepEqual(statuses(), [
+    ['first', 'same-id', '%1', 'working'],
+    ['second', 'same-id', '%1', 'waiting'],
+    ['first', 'same-id', '%1', 'idle'],
+  ]);
+  assert.ok(!JSON.stringify(updates).includes('transcript fixture'));
+  assert.deepEqual(transcripts, []);
+
+  views.replaySidebarStatus();
+  assert.deepEqual(statuses().slice(-2), [
+    ['first', 'same-id', '%1', 'idle'],
+    ['second', 'same-id', '%1', 'waiting'],
+  ]);
+  publish(second, 'offline');
+  assert.deepEqual(statuses().at(-1), ['second', 'same-id', undefined, undefined]);
+  views.releaseWorkspace('first');
+  assert.deepEqual(statuses().at(-1), ['first', 'same-id', undefined, undefined]);
+  const count = updates.length;
+  first.emit('sidebar-status', { workspaceId: 'first', sessionId: 'same-id', paneId: '%1', status: 'working' });
+  views.replaySidebarStatus();
+  assert.equal(updates.length, count);
 });
 
 test('resuming refreshes the reader that already holds the conversation instead of reloading it', async () => {
