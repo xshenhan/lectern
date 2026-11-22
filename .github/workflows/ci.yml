@@ -1,12 +1,10 @@
 # Lectern tests: typecheck and unit tests on macOS and Windows; on Linux (xvfb)
 # the private-information guard, a production dependency audit and the whole
 # offline suite through `npm run test:all` (typecheck, unit tests, build, every
-# desktop e2e); optionally a packaging smoke test of the unpacked app on every
-# platform. Nothing here talks to a real model or SSH host.
+# desktop e2e); optionally builds the installers, launches the packaged app and
+# uploads artifacts on each platform. Nothing here talks to a real model or SSH host.
 #
-# It runs when release.yml calls it for a pushed v* tag (the release only
-# publishes if it passes) or by hand from the Actions tab. Pushes and pull
-# requests do not trigger it.
+# Called by the pull request and release workflows, and available for manual runs.
 name: CI
 
 on:
@@ -17,7 +15,7 @@ on:
         type: string
         default: ''
       package:
-        description: Also package and launch the unpacked app on every platform
+        description: Also build installers and launch the packaged app on every platform
         type: boolean
         default: true
   workflow_dispatch:
@@ -27,7 +25,7 @@ on:
         type: string
         default: ''
       package:
-        description: Also package and launch the unpacked app on every platform
+        description: Also build installers and launch the packaged app on every platform
         type: boolean
         default: true
 
@@ -102,6 +100,7 @@ jobs:
           name: test-all-logs
           path: test-results/test-all/
           if-no-files-found: ignore
+          overwrite: true
       - name: Upload screenshots and diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
@@ -111,24 +110,35 @@ jobs:
             test-results/
             !test-results/package/
           if-no-files-found: ignore
+          overwrite: true
           retention-days: 7
 
   package:
     # release.yml turns this off: its own build job packages and launches every platform.
     if: inputs.package
-    name: Package smoke test (${{ matrix.os }})
+    name: Installers (${{ matrix.platform }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
+            platform: linux-x64
             target: --linux
+            arch: x64
           - os: macos-latest
+            platform: mac-arm64
             target: --mac
+            arch: arm64
+          - os: macos-15-intel
+            platform: mac-x64
+            target: --mac
+            arch: x64
           - os: windows-latest
+            platform: windows-x64
             target: --win
+            arch: x64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -144,16 +154,64 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - run: npm ci
       - run: npm run build
-      - name: Package the unpacked app (ad hoc signature on macOS)
+      - name: Build the release installers without release credentials
         shell: bash
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: node scripts/package-desktop.mjs ${{ matrix.target }} --dir --publish never -c.directories.output=test-results/package -c.mac.identity=-
+          LECTERN_PACKAGE_OUT: test-results/package
+        run: bash scripts/ci-package.sh ${{ matrix.target }} --${{ matrix.arch }}
+      - name: Verify installer checksums
+        run: node scripts/release-checksums.mjs test-results/package/assets
+      - name: Verify macOS disk image
+        if: runner.os == 'macOS'
+        id: disk-image
+        shell: bash
+        run: |
+          images=(test-results/package/assets/*-mac-${{ matrix.arch }}.dmg)
+          test "${#images[@]}" -eq 1
+          hdiutil verify "${images[0]}"
+          printf 'path=%s\nname=%s\n' "${images[0]}" "${images[0]##*/}" >> "$GITHUB_OUTPUT"
+      - name: Upload macOS DMG
+        if: runner.os == 'macOS'
+        id: dmg
+        uses: actions/upload-artifact@v7
+        with:
+          # Raw uploads use the filename, and overwrite deletes by the explicit name.
+          name: ${{ steps.disk-image.outputs.name }}
+          path: ${{ steps.disk-image.outputs.path }}
+          archive: false
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+      - name: Link the DMG in the run summary
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          DMG_URL: ${{ steps.dmg.outputs.artifact-url }}
+        run: printf '[Download the macOS %s DMG](%s)\n' '${{ matrix.arch }}' "$DMG_URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload other installers and checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: installers-${{ matrix.platform }}
+          path: |
+            test-results/package/assets/
+            !test-results/package/assets/*.dmg
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+          retention-days: 30
       - name: Launch the packaged app
         shell: bash
+        env:
+          LECTERN_DMG: ${{ steps.disk-image.outputs.path }}
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
             xvfb-run -a -s '-screen 0 1600x1000x24' node scripts/smoke-package.mjs test-results/package
+          elif [ "$RUNNER_OS" = macOS ]; then
+            mount_dir=$(mktemp -d "${RUNNER_TEMP}/lectern-dmg.XXXXXX")
+            trap 'hdiutil detach "$mount_dir" -quiet || true; rmdir "$mount_dir"' EXIT
+            hdiutil attach "${LECTERN_DMG}" -readonly -nobrowse -quiet -mountpoint "$mount_dir"
+            codesign --verify --deep --strict "$mount_dir/Lectern.app"
+            node scripts/smoke-package.mjs "$mount_dir/Lectern.app/Contents/MacOS/Lectern"
           else
             node scripts/smoke-package.mjs test-results/package
           fi
@@ -161,7 +219,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: package-smoke-${{ matrix.os }}
+          name: package-smoke-${{ matrix.platform }}
           path: test-results/*.png
           if-no-files-found: ignore
+          overwrite: true
           retention-days: 7
