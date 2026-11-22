@@ -1,0 +1,38 @@
+name: Pull request
+
+on:
+  push:
+    branches: [codex/pr-validation-sidebar-review]
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests and installers
+    uses: ./.github/workflows/ci.yml
+    with:
+      package: true
+
+  compatibility:
+    name: Claude Code compatibility
+    uses: ./.github/workflows/claude-code-compat.yml
+
+  full-pr-validation:
+    name: Full PR validation
+    if: always()
+    needs: [tests, compatibility]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TESTS: ${{ needs.tests.result }}
+      COMPATIBILITY: ${{ needs.compatibility.result }}
+    steps:
+      - name: Require all validation jobs to pass
+        run: |
+          printf 'Tests and installers %s\nClaude Code compatibility %s\n' "$TESTS" "$COMPATIBILITY"
+          test "$TESTS" = success && test "$COMPATIBILITY" = success
