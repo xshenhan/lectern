@@ -78,8 +78,15 @@ try {
       fixture.current = next;
       return next;
     });
+    fixture.resumeGates = new Map();
     replace('resumeSession', async (event, workspaceId, sessionId) => {
       fixture.calls.push({ method: 'resume', workspaceId });
+      const gate = fixture.resumeGates.get(workspaceId);
+      if (gate) {
+        const error = await gate.promise;
+        fixture.resumeGates.delete(workspaceId);
+        if (error) throw new Error(error);
+      }
       fixture.live[workspaceId] = true;
       const workspace = (await workspaces(event)).find(item => item.id === workspaceId);
       // Like the main process: the reader already showing it reads once more and pushes the live pane.
@@ -175,6 +182,45 @@ try {
   await page.locator('.error-banner').getByRole('button', { name: '重试', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.message-assistant')?.textContent.includes('service-b'));
 
+  // Control two slow resumes independently, including the older request finishing first.
+  const [first, second] = stored;
+  await app.evaluate((_electron, workspaceIds) => {
+    const { resumeGates } = globalThis.__sshUI;
+    for (const id of workspaceIds) {
+      let finish;
+      const promise = new Promise(resolve => { finish = resolve; });
+      resumeGates.set(id, { promise, finish });
+    }
+  }, [first.id, second.id]);
+  const resume = page.getByRole('button', { name: '续接会话', exact: true });
+  const openConversation = async (index) => {
+    await machine.locator(`.session-row[data-session-id="${ids[index]}"]`).click();
+    await page.locator('.message-assistant').filter({ hasText: paths[index] }).waitFor();
+  };
+  await openConversation(0);
+  await resume.click();
+  await resume.locator('.rotating').waitFor();
+  await openConversation(1);
+  assert.equal(await resume.isEnabled(), true, 'Another history can be resumed while the first request is pending');
+  assert.equal(await resume.locator('.rotating').count(), 0, 'Another history never inherits the first spinner');
+  await resume.click();
+  await resume.locator('.rotating').waitFor();
+  await openConversation(0);
+  await resume.locator('.rotating').waitFor();
+  await openConversation(1);
+  await app.evaluate((_electron, id) => { globalThis.__sshUI.resumeGates.get(id).finish(); }, first.id);
+  await page.waitForFunction(id => document.querySelector(`.session-row[data-session-id="${id}"]`)?.dataset.sessionLive === 'true', ids[0]);
+  assert.equal(await resume.isDisabled(), true, 'Finishing the first request leaves the second pending');
+  assert.equal(await resume.locator('.rotating').count(), 1);
+  await openConversation(0);
+  await page.waitForFunction(() => !document.querySelector('textarea')?.disabled);
+  assert.equal(await resume.count(), 0, 'A live conversation stays usable during another resume');
+  await openConversation(1);
+  await resume.locator('.rotating').waitFor();
+  await app.evaluate((_electron, id) => { globalThis.__sshUI.resumeGates.get(id).finish('Synthetic resume failure'); }, second.id);
+  await page.locator('.error-banner').getByText('Synthetic resume failure', { exact: false }).waitFor();
+  assert.equal(await resume.isEnabled(), true, 'The failed resume can be retried');
+
   // The machine's own folder dialog browses that machine.
   const browsed = await app.evaluate(() => globalThis.__sshUI.browses.at(-1).target);
   assert.ok(browsed.kind === 'ssh' && browsed.host === host && !browsed.port, JSON.stringify(browsed));
@@ -215,7 +261,7 @@ try {
     assert.ok(stored.some(workspace => workspace.name === 'Local form fixture' && workspace.kind === 'local' && workspace.port === undefined));
   }
   const fixture = await app.evaluate(() => ({ calls: globalThis.__sshUI.calls, scans: globalThis.__sshUI.scans, prefetches: globalThis.__sshUI.prefetches }));
-  assert.equal(fixture.calls.filter(call => call.method === 'resume').length, 1);
+  assert.equal(fixture.calls.filter(call => call.method === 'resume').length, 3);
   const watched = new Set(fixture.calls.filter(call => call.method === 'watch').map(call => call.workspaceId));
   assert.ok([...watched].every(id => fixture.prefetches.includes(id)), 'every opened SSH conversation indexes its folder for @');
   assert.ok(fixture.calls.every(call => ['discover', 'watch', 'resume'].includes(call.method)));

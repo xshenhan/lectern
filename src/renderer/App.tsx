@@ -139,7 +139,24 @@ function mergeDraft(existing: string, text: string) {
   if (!text.trim() || existing.includes(text)) return existing;
   return `${text}\n\n${existing}`;
 }
-export default function App({view = "primary"}: {view?: ChatView}) {
+export default function App() {
+  const [resumingSessions, setResumingSessions] = useState<ReadonlySet<string>>(() => new Set());
+  const setResuming = useCallback((scope: string, pending: boolean) => {
+    setResumingSessions(current => {
+      const next = new Set(current);
+      if (pending) next.add(scope);
+      else next.delete(scope);
+      return next;
+    });
+  }, []);
+  return <ChatPane view="primary" resumingSessions={resumingSessions} setResuming={setResuming} />;
+}
+
+function ChatPane({ view, resumingSessions, setResuming }: {
+  view: ChatView;
+  resumingSessions: ReadonlySet<string>;
+  setResuming: (scope: string, pending: boolean) => void;
+}) {
   const prefs = useDesktopState();
   const primary = view === "primary";
   const [preferencesOpen,setPreferencesOpen] = useState<boolean | "new-machine">(false);
@@ -227,7 +244,9 @@ export default function App({view = "primary"}: {view?: ChatView}) {
     setArtifact(undefined);
     if (artifactOpener.current?.isConnected) artifactOpener.current.focus({ preventScroll: true });
   }, []);
-  const [busy, setBusy] = useState(false);
+  const [actionBusy, setBusy] = useState(false);
+  const resuming = resumingSessions.has(activityScope);
+  const busy = actionBusy || resuming;
   const connectionOf = useMachineConnections();
   const navigated = useNavigated();
   const [machinePrompt, setMachinePrompt] = useState<{ key: string; host: string; port?: number; label: string }>();
@@ -833,24 +852,21 @@ export default function App({view = "primary"}: {view?: ChatView}) {
 
   async function resume() {
     markNavigated();
-    if (!workspace || !sessionId || hostBlocked) return;
+    if (!workspace || !sessionId || hostBlocked || busy) return;
     const shown = snapshot?.workspaceId === workspace.id && snapshot.sessionId === sessionId;
     // Do not advance the selection: the transcript is keyed by it and would remount.
-    // Opening another conversation meanwhile still advances it and ends this resume.
+    // If the user navigates away, let the resume finish in the background.
     const selectionRequest = sessionRequest.current;
-    setBusy(true);
+    const stillShowing = () => mounted.current && selected.current.workspaceId === workspace.id &&
+      selected.current.sessionId === sessionId;
+    setResuming(activityScope, true);
     setError("");
     try {
       const resumed = await window.desktop.resumeSession(
         workspace.id,
         sessionId,
       );
-      if (
-        sessionRequest.current !== selectionRequest ||
-        selected.current.workspaceId !== workspace.id ||
-        selected.current.sessionId !== sessionId
-      )
-        return;
+      if (!stillShowing()) return;
       patchWorkspace(workspace.id, (current) => ({
         ...(current ?? { workspace, panes: [] }),
         sessions: (current?.sessions ?? []).map((item) =>
@@ -860,12 +876,12 @@ export default function App({view = "primary"}: {view?: ChatView}) {
       // The loaded transcript stays on screen: the main process already re-read
       // this conversation and pushed the snapshot with the new pane. Only a pane
       // that never loaded it (an earlier read failed) opens it again.
-      if (!shown) await openSession(workspace.id, sessionId);
+      if (!shown && sessionRequest.current === selectionRequest) await openSession(workspace.id, sessionId);
     } catch (e) {
-      if (sessionRequest.current === selectionRequest) setError(errorText(e));
+      if (stillShowing()) setError(errorText(e));
       else reportActionError(e, "续接会话失败");
     } finally {
-      setBusy(false);
+      setResuming(activityScope, false);
     }
   }
 
@@ -1349,7 +1365,8 @@ export default function App({view = "primary"}: {view?: ChatView}) {
         </div>
       </ResizableSidebar>}
 
-      <SplitWorkspace view={view} second={primary && prefs.split ? <App view="secondary"/> : null}>
+      <SplitWorkspace view={view} second={primary && prefs.split
+        ? <ChatPane view="secondary" resumingSessions={resumingSessions} setResuming={setResuming} /> : null}>
       <main className={`main-area${drawer || taskShown ? " artifact-open" : ""}`} {...attachments.dropTarget}>
         <header className="topbar">
           <div className="topbar-left">
@@ -1666,8 +1683,8 @@ export default function App({view = "primary"}: {view?: ChatView}) {
           {sessionId && snapshot && !snapshot.pendingFork && !paneId && snapshot.status === "idle" && session?.path && (
             <div className="resume-bar">
               <span>{t('app.savedOnMachine')}</span>
-              <button onClick={() => void resume()} disabled={busy || hostBlocked}>
-                {busy ? (
+              <button onClick={() => void resume()} disabled={busy || hostBlocked} aria-busy={resuming || undefined}>
+                {resuming ? (
                   <Loader2 size={14} className="rotating" />
                 ) : (
                   <RefreshCw size={14} />
