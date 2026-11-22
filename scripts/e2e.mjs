@@ -58,7 +58,16 @@ try {
   assert.equal(await page.locator('.message-assistant').count(), 1);
   await page.waitForFunction(() => document.querySelector('.session-row.active')?.getAttribute('data-status') === 'idle');
   const readyBackground = await page.locator('.session-row.active').evaluate(node => getComputedStyle(node).backgroundColor);
-  await page.screenshot({ path: path.join(results, 'desktop-initial.png') });
+  const initialScreenshot = { path: path.join(results, 'desktop-initial.png') };
+  try {
+    await page.screenshot(initialScreenshot);
+  } catch (error) {
+    // Under Xvfb the first capture can arrive before Chromium has a frame to copy.
+    if (process.platform !== 'linux' || !String(error).includes('Page.captureScreenshot): Unable to capture screenshot')) throw error;
+    console.warn('Retrying the initial desktop screenshot after Chromium could not capture a frame');
+    await page.waitForFunction(() => new Promise(resolve => requestAnimationFrame(() => resolve(true))), undefined, { timeout: 5000 });
+    await page.screenshot(initialScreenshot);
+  }
   const input = page.getByRole('textbox', { name: '发送给 Claude 的消息' });
   const sizing = () => input.evaluate(el => ({ height: el.clientHeight, line: parseFloat(getComputedStyle(el).lineHeight),
     max: parseFloat(getComputedStyle(el).maxHeight), scroll: el.scrollHeight }));

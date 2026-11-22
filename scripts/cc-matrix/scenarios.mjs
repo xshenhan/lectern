@@ -596,7 +596,7 @@ export const SCENARIOS = [
       ask('ask-single-long', [album], '好，我把这个问题说清楚，再问你一次。\n\n背景：示例应用的相册页用 ImageGrid 组件显示缩略图。每张缩略图都记着它是根据哪一份元数据生成的，元数据一变就重新生成。\n\n两个页面现在的做法不一样：\n\n- 详情页（今天刚改过）：只要屏幕上还是同一张图，缩略图就保持不变。\n- 相册页（没改）：元数据只要一变就立刻重新生成，恰好在滚动时会闪一下。\n\n影响：不会丢图，也不会卡住，最坏的情况是偶尔闪一下。');
       const squash = text => text.replace(/\s+/g, '');
       const card = page.locator(sel.question);
-      const option = number => card.locator(`button.question-option[data-question-number="${number}"]`);
+      const option = (number, within = card) => within.locator(`button.question-option[data-question-number="${number}"]`);
       const heading = text => page.waitForFunction(([selector, wanted]) => document.querySelector(selector)?.textContent.replace(/\s+/g, '') === wanted,
         [`${sel.question} h3`, squash(text)], { timeout: 20_000 });
       // A named session closes the native dialog with a rule carrying its name.
@@ -657,6 +657,45 @@ export const SCENARIOS = [
       await check('question-review-long', async () => {
         await ui.waitStatus('idle', 30_000);
         const id = await rename('示例问答');
+        const chooseFirst = async number => {
+          await heading(cleanup.question);
+          const token = await card.getAttribute('data-question-token');
+          assert.ok(token, 'the first question has a current token');
+          const cardWithToken = value => page.locator(`${sel.question}[data-question-token=${JSON.stringify(value)}]`);
+          // A refreshed card can remove the no-keys receipt before the next polling frame.
+          const receipt = await cardWithToken(token).evaluateHandle((element, previous) => {
+            let error;
+            const observer = new MutationObserver(() => {
+              if (element.dataset.questionToken === previous) error ??= element.querySelector('.question-error')?.textContent;
+            });
+            observer.observe(element, { childList: true, subtree: true, characterData: true });
+            return { error: () => error, disconnect: () => observer.disconnect() };
+          }, token);
+          try {
+            await option(number, cardWithToken(token)).click();
+            const outcome = await page.waitForFunction(({ selector, next, receipt }) =>
+              document.querySelector(`${selector} h3`)?.textContent.replace(/\s+/g, '') === next || receipt.error(),
+            { selector: sel.question, next: squash(extras.question), receipt }, { timeout: 20_000 });
+            const result = await outcome.jsonValue();
+            await outcome.dispose();
+            if (result !== true) {
+              assert.equal(result.replace(/^SessionSettingError: /, ''), '会话记录在读取后又有变化，未发送按键；卡片会按新的记录重新给出，请再选一次');
+              const fresh = await page.waitForFunction(({ selector, old, wanted }) => {
+                const card = document.querySelector(selector), token = card?.dataset.questionToken;
+                return token && token !== old && card.getAttribute('aria-busy') === 'false' &&
+                  card.querySelector('h3')?.textContent.replace(/\s+/g, '') === wanted && token;
+              }, { selector: sel.question, old: token, wanted: squash(cleanup.question) }, { timeout: 20_000 });
+              const freshToken = await fresh.jsonValue();
+              await fresh.dispose();
+              ctx.note(`review-first-choice-${number}-retry`, result);
+              await option(number, cardWithToken(freshToken)).click();
+            }
+          } finally {
+            await receipt.evaluate(observed => observed.disconnect());
+            await receipt.dispose();
+          }
+          await heading(extras.question);
+        };
         const reviewed = async () => {
           await card.locator('dl.question-review').waitFor({ timeout: 20_000 });
           return card.locator('dl.question-review dt').allInnerTexts();
@@ -664,9 +703,7 @@ export const SCENARIOS = [
         await ui.waitStatus('idle', 30_000);
         await ui.send('Ask me two long questions ccm:ask-long');
         await card.waitFor({ timeout: 60_000 });
-        await heading(cleanup.question);
-        await option(1).click();
-        await heading(extras.question);
+        await chooseFirst(1);
         await option(1).click();
         await page.waitForFunction(selector => document.querySelector(selector)?.getAttribute('aria-pressed') === 'true', `${sel.question} button.question-option[data-question-number="1"]`, { timeout: 15_000 });
         await option(2).click();
@@ -683,9 +720,7 @@ export const SCENARIOS = [
         await ui.waitStatus('idle', 30_000);
         await ui.send('Ask me again, I will cancel ccm:ask-long-cancel');
         await card.waitFor({ timeout: 60_000 });
-        await heading(cleanup.question);
-        await option(2).click();
-        await heading(extras.question);
+        await chooseFirst(2);
         await card.locator('nav.question-nav button').last().click();
         assert.deepEqual((await reviewed()).map(squash), [squash(cleanup.question)]);
         await card.locator('footer.question-actions button[data-question-number="2"]').click();
@@ -764,7 +799,9 @@ export const SCENARIOS = [
         await page.locator(sel.turnAction).nth(1).click();
         await ui.waitReply('ccm-steered-done', { timeout: 60_000 });
         const slowB = api.requests.find(r => r.script === 'slow-b'), steered = api.requests.find(r => r.script === 'steered');
-        assert.ok(slowB.aborted || steered.at < slowB.done, 'the steering message went out before the reply finished');
+        assert.ok(slowB?.stream && steered, 'the API received both the streaming and steering requests');
+        // The steered reply can arrive while the fake API is still settling the old stream.
+        assert.ok(slowB.done === undefined || slowB.aborted || steered.at < slowB.done, 'the steering message went out before the reply finished');
       });
       await check('interrupt', async () => {
         await ui.waitStatus('idle', 60_000);
@@ -1141,7 +1178,9 @@ export const SCENARIOS = [
         await page.reload();
         await ui.waitReply('ccm-sa-filler-done', { timeout: 30_000 });
         await page.locator('.history-page-control button').waitFor({ timeout: 30_000 });
-        assert.equal(await page.locator(`${sel.user}:has-text("Launch two more helpers")`).count(), 0, 'their launch is not on the first page');
+        // The old live snapshot can render before the fresh page arrives after reload.
+        const launch = page.locator(`.conversation-scroll ${sel.user}:has-text("Launch two more helpers")`);
+        await launch.waitFor({ state: 'detached', timeout: 30_000 });
         if (!await page.locator('.activity-float').isVisible()) await page.locator(sel.activityPill).click();
         const section = page.locator('.activity-float-section').filter({ has: page.locator('.activity-float-title', { hasText: '子代理' }) });
         await section.waitFor({ timeout: 20_000 });
@@ -1154,7 +1193,7 @@ export const SCENARIOS = [
         note('listed', listed);
         assert.deepEqual(listed.map(([agent, state]) => [agent, state]), [[more.held, 'running'], [more.quick, 'completed'], [agentId, 'completed']], 'all three, running first, newest first');
         assert.ok(listed.every(([, , label]) => label !== '较早'), 'none is "earlier"');
-        assert.equal(await page.locator(`${sel.user}:has-text("Launch two more helpers")`).count(), 0, 'still not loaded');
+        assert.equal(await launch.count(), 0, 'their launch is still not loaded');
         await page.screenshot({ path: path.join(ctx.dir, 'subagents.listed.png') }).catch(() => {});
       });
       await check('subagent-process-gone', async () => {
