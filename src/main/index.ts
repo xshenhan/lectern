@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { Backend, validateWorkspace } from '../backend';
+import { Backend, validateWorkspace, WorkspaceChangedError } from '../backend';
 import { HistoryIndexDiskStore } from '../backend/history-index-disk-store';
 import { installSilentWindows, silentWindowsRequested } from './silent-windows';
 import { installApplicationMenu } from './application-menu';
@@ -538,7 +538,11 @@ async function boot() {
       return controller.backend.listWorkspaceDirectories(target, path, offset);
     },
     discover: async (id, baselines) => {
-      const discovery = await controller.discover(id, baselines);
+      const discovery = await controller.discover(id, baselines).catch(error => {
+        if (error instanceof WorkspaceChangedError) return undefined;
+        throw error;
+      });
+      if (!discovery) return undefined;
       // Running conversations start reading in the background, so opening one
       // shows its current turn instead of a loading state.
       for (const session of discovery.sessions.filter(s => s.paneId).slice(0, 6)) controllers.prefetch(id, session.id);

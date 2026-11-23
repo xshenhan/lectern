@@ -34,7 +34,7 @@ export class WorkspaceDiscoveryCache {
   private disposed = false;
   private readonly concurrency: number;
   constructor(
-    private readonly discover: (id: string) => Promise<WorkspaceDiscovery>,
+    private readonly discover: (id: string) => Promise<WorkspaceDiscovery | undefined>,
     private readonly onChange: (
       states: Record<string, WorkspaceDiscoveryState>,
     ) => void,
@@ -156,11 +156,14 @@ export class WorkspaceDiscoveryCache {
 
   private async execute(request: Request, lane: string) {
     try {
-      const result = await this.discover(request.id);
+      let result = await this.discover(request.id);
+      // A folder or binding change can supersede a scan even when the view hasn't changed.
+      if (!result && this.isCurrent(request)) result = await this.discover(request.id);
       if (this.isCurrent(request)) {
-        this.options.onResult?.(result, request.id);
+        if (result) this.options.onResult?.(result, request.id);
         this.states.set(request.id, {
-          data: result,
+          // If the retry was also superseded, keep the list until the next scheduled read.
+          ...(result ? { data: result } : this.states.get(request.id)),
           loading: false,
           updatedAt: Date.now(),
         });

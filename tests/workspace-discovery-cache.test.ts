@@ -58,6 +58,57 @@ test('an older directory scan cannot overwrite a locally created or resumed sess
   cache.dispose();
 });
 
+test('a superseded scan keeps the visible sessions while one fresh scan runs', async () => {
+  const fresh = deferred<WorkspaceDiscovery>();
+  const previous = result('a', 'visible history'), updated = result('a', 'resumed chat');
+  const errors: unknown[] = [], published: WorkspaceDiscovery[] = [];
+  let started = 0;
+  const cache = new WorkspaceDiscoveryCache(async () => (++started === 1 ? undefined : fresh.promise), () => {},
+    { onError: error => errors.push(error), onResult: value => published.push(value) });
+  cache.patch('a', () => previous);
+  const pending = cache.refresh('a');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started, 2);
+  assert.equal(cache.refresh('a'), pending, 'the retry belongs to the same request');
+  assert.equal(cache.get('a')?.data, previous);
+  assert.equal(cache.get('a')?.loading, true);
+  assert.deepEqual(published, []);
+  fresh.resolve(updated);
+  assert.equal(await pending, updated);
+  assert.equal(cache.get('a')?.error, undefined);
+  assert.deepEqual(published, [updated]);
+  assert.deepEqual(errors, []);
+  cache.dispose();
+});
+
+test('repeated supersession stops after one immediate retry without reporting a connection error', async () => {
+  let started = 0;
+  const previous = result('a'), errors: unknown[] = [];
+  const cache = new WorkspaceDiscoveryCache(async () => { started++; return undefined; }, () => {},
+    { onError: error => errors.push(error) });
+  cache.patch('a', () => previous);
+  assert.equal(await cache.refresh('a'), undefined);
+  assert.equal(started, 2);
+  assert.equal(cache.get('a')?.data, previous);
+  assert.equal(cache.get('a')?.loading, false);
+  assert.equal(cache.get('a')?.error, undefined);
+  assert.deepEqual(errors, []);
+  cache.dispose();
+});
+
+test('forgetting a directory prevents a superseded scan from retrying', async () => {
+  let started = 0;
+  const delayed = deferred<WorkspaceDiscovery | undefined>();
+  const cache = new WorkspaceDiscoveryCache(() => { started++; return delayed.promise; }, () => {});
+  const pending = cache.refresh('a');
+  cache.forget('a');
+  delayed.resolve(undefined);
+  await pending;
+  assert.equal(started, 1);
+  assert.equal(cache.get('a'), undefined);
+  cache.dispose();
+});
+
 test('a published native name supersedes an in-flight scan in every populated view', async () => {
   const read = deferred<WorkspaceDiscovery>();
   const cache = new WorkspaceDiscoveryCache(() => read.promise, () => {});

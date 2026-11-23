@@ -45,6 +45,8 @@ export const releaseNotes: ReleaseNote[] = [
         'The sidebar keeps showing a reply in progress after you switch conversations and updates when the reply finishes.'],
       ['续接进度和失败提示只随对应会话显示，切换分屏或同时续接其他会话时仍可独立重试。',
         'Resume progress and failures stay with each conversation, so you can retry after moving between panes or resuming another chat.'],
+      ['续接会话等操作使项目扫描结果过期时，会话列表会自动重试，避免误报连接错误。',
+        'The conversation list retries automatically when an action such as resuming a chat supersedes a folder scan, avoiding a misleading connection error.'],
     ],
   },
   {

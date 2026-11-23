@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, appendFile, chmod, mkdir, rm, symlink, rename, real
 import { homedir, tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Backend, commandInvocation, foregroundClaudePids, isClaudeForeground, projectSlug, quoteShell, runCommand, validateWorkspace } from '../src/backend/index';
+import { Backend, commandInvocation, foregroundClaudePids, isClaudeForeground, projectSlug, quoteShell, runCommand, validateWorkspace, WorkspaceChangedError } from '../src/backend/index';
 import { Transport } from '../src/backend/transport';
 import type { Workspace, WorkspaceEndpoint } from '../src/shared/types';
 
@@ -155,12 +155,13 @@ setInterval(() => { const trigger=path.join(process.env.CLAUDE_CONFIG_DIR,'move-
     assert.ok(historyOnly.sessions.every(s => !s.paneId && s.mapping === 'unbound'));
 
     const oldScan = delayNextRead(backend, script => script.includes('count=0'));
-    const obsoleteDiscovery = assert.rejects(backend.discover(target), /Workspace changed/);
+    const obsoleteDiscovery = assert.rejects(backend.discover(target), WorkspaceChangedError);
     await oldScan.captured;
     const pending = await backend.createSession(target);
     oldScan.release();
     await obsoleteDiscovery;
     assert.equal((backend as any).sessions.get(`${target.id}:${pending.id}`)?.paneId, pending.paneId, 'a pre-launch scan cannot erase the new session cache');
+    assert.equal(backend.knownRunning(target.id).failedAt, undefined, 'superseded scans do not mark the folder unreachable');
     await waitReady(pending.id);
     const activeOnly = await backend.discover(target);
     assert.equal(activeOnly.sessions.find(s => s.id === pending.id)?.paneId, pending.paneId);

@@ -235,6 +235,59 @@ async function checkGlobalSorting(sessionId, olderId, remoteUpdatedAt) {
   await selectSort('project');
   await page.locator('.workspace-tree-group').filter({ hasText: remoteWorkspace.name }).waitFor();
   assert.equal(await sessionRow(remoteChat.id).getAttribute('aria-current'), 'page');
+  await checkSupersededDiscovery(local, remote, remoteChat);
+}
+
+async function checkSupersededDiscovery(local, remote, chat) {
+  const newTitle = '远程发布记录已刷新';
+  const updated = { ...remote, sessions: [{ ...chat, title: newTitle }] };
+  const refresh = async () => {
+    await page.locator(`.workspace-row[data-workspace-id="${remote.workspace.id}"]`).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: '刷新会话列表', exact: true }).click();
+  };
+  const waitForScan = (count, message, timeout) => waitUntil(
+    () => app.evaluate(() => globalThis.sidebarLayoutScans.started).then(started => started >= count), message, timeout,
+  );
+
+  await app.evaluate(({ ipcMain }, { local, updated }) => {
+    const gates = Array.from({ length: 3 }, () => {
+      let finish, fail;
+      const result = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+      return { result, finish, fail };
+    });
+    const scans = globalThis.sidebarLayoutScans = { started: 0, gates, updated };
+    ipcMain.removeHandler('lectern:discover');
+    ipcMain.handle('lectern:discover', (_event, id) => id === updated.workspace.id
+      ? scans.gates[scans.started++]?.result ?? updated
+      : local);
+  }, { local, updated });
+  const row = sessionRow(chat.id);
+  try {
+    await refresh();
+    await waitForScan(1, 'The sidebar did not start the requested scan');
+    // Electron resolves an obsolete backend scan without a discovery payload.
+    await app.evaluate(() => { globalThis.sidebarLayoutScans.gates[0].finish(); });
+    await waitForScan(2, 'An obsolete scan did not trigger an immediate retry', 3000);
+    assert.equal(await row.locator('.session-title').innerText(), chat.title, 'The existing row stays visible during the retry');
+    assert.equal(await page.locator('.error-banner, .tree-note-error').count(), 0, 'An obsolete scan does not show an error');
+    await app.evaluate(() => {
+      const { gates, updated } = globalThis.sidebarLayoutScans;
+      gates[1].finish(updated);
+    });
+    await row.getByText(newTitle, { exact: true }).waitFor();
+    await page.screenshot({ path: path.join(resultDirectory, 'recovered-discovery.png') });
+
+    await refresh();
+    await waitForScan(3, 'The sidebar did not start the next scan');
+    await app.evaluate(() => { globalThis.sidebarLayoutScans.gates[2].fail(new Error('Synthetic discovery failure')); });
+    await page.locator('.error-banner').getByText('Synthetic discovery failure', { exact: false }).waitFor();
+    assert.equal(await row.getByText(newTitle, { exact: true }).isVisible(), true, 'A real failure preserves the last successful scan');
+  } finally {
+    await app.evaluate(() => {
+      const { gates, updated } = globalThis.sidebarLayoutScans;
+      for (const gate of gates) gate.finish(updated);
+    });
+  }
 }
 
 try {
@@ -355,7 +408,7 @@ try {
   await app.close();
   app = undefined;
   await checkBackgroundReplyStatus();
-  console.log(JSON.stringify({ success: true, defaultWidth: 304, persistedWidth: preferred, dockedChat, narrowMax: 350, rows, fonts, sidebarSort: 'global recent and active priority across local and SSH, search, keyboard, selection, reload', backgroundReplyStatus: true, resultDirectory }));
+  console.log(JSON.stringify({ success: true, defaultWidth: 304, persistedWidth: preferred, dockedChat, narrowMax: 350, rows, fonts, sidebarSort: 'global recent and active priority across local and SSH, search, keyboard, selection, reload', backgroundReplyStatus: true, supersededDiscoveryRetried: true, resultDirectory }));
 } catch (error) {
   await page?.screenshot({ path: path.join(resultDirectory, 'failure.png') }).catch(() => {});
   throw error;

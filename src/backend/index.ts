@@ -87,6 +87,9 @@ export interface ReadResult { /** Asked for with `listSubagents`: every subagent
 export class SessionMappingError extends Error {
   constructor(message: string) { super(message); this.name = 'SessionMappingError'; }
 }
+export class WorkspaceChangedError extends Error {
+  constructor() { super('Workspace changed while scanning; refresh to use the current session bindings'); }
+}
 /** The session has no transcript and no live pane: Claude exited before writing
  * anything (a refused trust prompt, a crash), so no pane is bound any more. */
 export class SessionGoneError extends Error {
@@ -208,7 +211,7 @@ export class Backend {
   private configRevision(workspaceId: string): number { return this.workspaceConfigRevisions.get(workspaceId) ?? 0; }
   private touchWorkspace(workspaceId: string): void { this.workspaceRevisions.set(workspaceId, this.revision(workspaceId) + 1); }
   private assertCurrentWorkspace(workspace: Workspace, revision: number): void {
-    if (this.revision(workspace.id) !== revision || this.workspaceSignatures.get(workspace.id) !== JSON.stringify(workspace)) throw new Error('Workspace changed while scanning; refresh to use the current session bindings');
+    if (this.revision(workspace.id) !== revision || this.workspaceSignatures.get(workspace.id) !== JSON.stringify(workspace)) throw new WorkspaceChangedError();
   }
   private assertCurrentWorkspaceConfiguration(workspace: Workspace, revision: number): void {
     if (this.configRevision(workspace.id) !== revision || this.workspaceSignatures.get(workspace.id) !== JSON.stringify(workspace)) throw new DirectoryTrustError(t('backend.workspaceConfigChanged'));
@@ -472,8 +475,12 @@ exit 0`;
   async discover(workspace: Workspace, baselines?: ReplyBaselines): Promise<WorkspaceDiscovery> {
     const outcome = (patch: { okAt?: number; failedAt?: number; error?: string }) =>
       this.discoveries.set(workspace.id, { ...this.discoveries.get(workspace.id), ...patch });
-    return this.discoverNow(workspace, baselines).then(result => { outcome({ okAt: Date.now() }); return result; },
-      error => { outcome({ failedAt: Date.now(), error: String(error instanceof Error ? error.message : error).split('\n')[0].slice(0, 300) }); throw error; });
+    return this.discoverNow(workspace, baselines).then(result => { outcome({ okAt: Date.now() }); return result; }, error => {
+      if (!(error instanceof WorkspaceChangedError)) {
+        outcome({ failedAt: Date.now(), error: String(error instanceof Error ? error.message : error).split('\n')[0].slice(0, 300) });
+      }
+      throw error;
+    });
   }
   private async discoverNow(workspace: Workspace, baselines?: ReplyBaselines): Promise<WorkspaceDiscovery> {
     return diagnostic.operation('backend.discover', { workspaceId: workspace.id }, async () => {
