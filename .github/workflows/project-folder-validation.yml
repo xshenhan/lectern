@@ -110,6 +110,14 @@ jobs:
           compression-level: 0
           overwrite: true
           retention-days: 30
+      - name: Synchronize the macOS smoke test with native window events
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          VALIDATION_SHA: ${{ github.workflow_sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$VALIDATION_SHA"
+          git show "$VALIDATION_SHA:.github/verification-patches/mac-package-smoke.patch" | git apply
       - name: Launch the packaged app
         shell: bash
         env:
@@ -119,7 +127,7 @@ jobs:
             xvfb-run -a -s '-screen 0 1600x1000x24' node scripts/smoke-package.mjs test-results/package
           elif [ "$RUNNER_OS" = macOS ]; then
             mount_dir=$(mktemp -d "${RUNNER_TEMP}/lectern-dmg.XXXXXX")
-            trap 'hdiutil detach "$mount_dir" -quiet || true; rmdir "$mount_dir"' EXIT
+            trap 'hdiutil detach "$mount_dir" -quiet || hdiutil detach "$mount_dir" -quiet -force || true; rmdir "$mount_dir" || true' EXIT
             hdiutil attach "${LECTERN_DMG}" -readonly -nobrowse -quiet -mountpoint "$mount_dir"
             codesign --verify --deep --strict "$mount_dir/Lectern.app"
             node scripts/smoke-package.mjs "$mount_dir/Lectern.app/Contents/MacOS/Lectern"
