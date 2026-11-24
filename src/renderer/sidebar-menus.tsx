@@ -1,7 +1,8 @@
-import { Archive, ChevronDown, ChevronRight, ChevronsUp, Columns2, Copy, FolderOpen, FolderPlus, Hash, History, LogIn, MessageSquare, Pencil, Plus, RefreshCw, Settings2, SquareTerminal, Trash2 } from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, ChevronsUp, Columns2, Copy, FolderOpen, FolderPlus, Hash, History, LogIn, Mail, MailOpen, MessageSquare, Pencil, Plus, RefreshCw, Settings2, SquareTerminal, Trash2 } from "lucide-react";
 import type { SessionInfo, Workspace } from "../shared/types";
 import { confirmAction, copyWithToast, promptText, showToast, type MenuEntry } from "./ContextMenu";
 import { setDesktop, type ConnectionProfile } from "./desktop-state";
+import { revisitTreeSession, setTreeSessionUnread } from "./sidebar-receipts";
 import type { WorkspaceMachine } from "./workspace-machines";
 import { t } from '../shared/i18n';
 
@@ -91,12 +92,20 @@ export function folderMenu(workspace: Workspace, open: boolean, actions: Sidebar
   ].filter(Boolean) as MenuEntry[];
 }
 
-export function sessionMenu(workspace: Workspace, session: SessionInfo, actions: SidebarMenuActions & { rename(): void }): MenuEntry[] {
+export function sessionMenu(workspace: Workspace, session: SessionInfo, actions: SidebarMenuActions & { rename(): void }, unread = false): MenuEntry[] {
   const title = session.title || t('app.newChat'), running = !!session.paneId;
   const resume = `cd ${shellQuote(workspace.cwd)} && claude --resume ${session.id}`;
   return [
-    { label: t('sidebar.open'), icon: icon(MessageSquare), onSelect: () => actions.open(workspace, session.id) },
-    { label: t('sidebar.openBeside'), icon: icon(Columns2), onSelect: () => actions.openBeside(workspace, session) },
+    { label: t('sidebar.open'), icon: icon(MessageSquare), onSelect: () => {
+      revisitTreeSession(workspace, session.id);
+      actions.open(workspace, session.id);
+    } },
+    { label: t('sidebar.openBeside'), icon: icon(Columns2), onSelect: () => {
+      revisitTreeSession(workspace, session.id);
+      actions.openBeside(workspace, session);
+    } },
+    { label: t(unread ? 'sidebar.markRead' : 'sidebar.markUnread'), icon: icon(unread ? MailOpen : Mail),
+      onSelect: () => setTreeSessionUnread(workspace, session.id, !unread) },
     "separator",
     { label: t('sidebar.rename'), icon: icon(Pencil), hint: "F2", onSelect: actions.rename },
     { label: t('sidebar.copyTitle'), icon: icon(Copy), onSelect: () => copyWithToast(title) },

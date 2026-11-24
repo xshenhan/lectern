@@ -1,8 +1,8 @@
 // npm run build && node scripts/background-work-e2e.mjs [packaged-executable]
 // Installed Claude Code (isolated CLAUDE_CONFIG_DIR, private tmux) and a loopback
 // mock model: the reply starts a background shell and a background subagent and
-// ends. The sidebar and title bar then say "后台运行中" until both are done and
-// Claude has answered their notifications. "关闭对话" asks first and names that
+// ends. The sidebar then says "回复完成" and shows both kinds of running work,
+// including when another chat is selected. "关闭对话" asks first and names that
 // work; cancelling keeps it running. Then the finished subagent is resumed with
 // SendMessage: it runs again (activity card, "后台运行中") until it notifies
 // again. No real model.
@@ -65,7 +65,7 @@ const server = createServer(async (req, res) => {
   } else {
     requests.push('start');
     blocks = [
-      { type: 'tool_use', id: 'toolu_bg_shell', name: 'Bash', input: { command: 'sleep 6; echo bg-shell-done', description: '后台等待', run_in_background: true } },
+      { type: 'tool_use', id: 'toolu_bg_shell', name: 'Bash', input: { command: 'for ((i=0; i<60; i++)); do test -f .release-background-shell && break; sleep 1; done; echo bg-shell-done', description: '后台等待', run_in_background: true } },
       { type: 'tool_use', id: 'toolu_bg_agent', name: 'Agent', input: { description: '后台子代理', prompt: '子代理任务：稍等片刻再回复。', subagent_type: 'general-purpose', run_in_background: true } },
     ];
   }
@@ -102,6 +102,7 @@ try {
   app = await _electron.launch({ args: exe ? [] : ['.'], ...(exe && { executablePath: path.resolve(exe) }), env });
   page = await app.firstWindow();
   page.setDefaultTimeout(30000);
+  await (await app.browserWindow(page)).evaluate(window => window.focus());
   await page.evaluate(() => window.desktop.onSnapshot(snapshot => { window.__bgSnapshot = snapshot; }));
   await page.getByRole('button', { name: '在 后台任务 新建对话' }).click();
   const input = page.getByRole('textbox', { name: '发送给 Claude 的消息' });
@@ -110,14 +111,39 @@ try {
   // The app starts the session in auto mode and gets past any auto-mode prompt itself.
   for (let i = 0; i < 80 && !requests.includes('start'); i++) await new Promise(r => setTimeout(r, 250));
   await page.locator('.message-assistant').getByText('已在后台启动。').waitFor();
-  const row = page.locator('.session-row.active');
-  // The reply is done; the shell and the subagent are not.
-  await page.locator('.session-row.active[data-background]').waitFor();
-  report.row = { label: await row.locator('.session-state-label').innerText(), title: await row.getAttribute('title') };
-  assert.equal(report.row.label, '后台运行中');
+  // The reply is done; the fixture holds the shell and the subagent until released.
+  const activeBackground = page.locator('.session-row.active[data-background]');
+  await activeBackground.waitFor();
+  const sessionId = await activeBackground.getAttribute('data-session-id');
+  assert.ok(sessionId, 'a running conversation has a stable session ID');
+  const row = page.locator(`.session-row[data-session-id="${sessionId}"]`);
+  const replyComplete = row.locator('.session-state-label', { hasText: /^回复完成$/ });
+  const bothRunning = row.locator('.session-background-label', { hasText: /^子代理 1 · 后台任务 1$/ });
+  await replyComplete.waitFor();
+  await bothRunning.waitFor();
+  report.row = { label: await replyComplete.innerText(), title: await row.getAttribute('title') };
   assert.match(report.row.title, /终端|子代理/);
+  assert.match(await row.getAttribute('aria-label'), /回复完成.*子代理 1 · 后台任务 1/);
   assert.equal(await row.locator('.session-status-dot.state-background').count(), 1);
-  report.topbar = await page.locator('.connection-status').innerText();
+
+  await page.getByRole('button', { name: '在 后台任务 新建对话' }).click();
+  await activeBackground.waitFor({ state: 'detached' });
+  await replyComplete.waitFor();
+  await bothRunning.waitFor();
+  assert.doesNotMatch(await row.getAttribute('class'), /\bactive\b/);
+  await row.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '标记为未读', exact: true }).click();
+  const unread = row.locator('.state-unread');
+  await unread.waitFor();
+  assert.equal(await row.locator('.state-background').count(), 1);
+  assert.equal(await row.getAttribute('data-background'), 'true');
+  assert.match(await row.getAttribute('aria-label'), /回复完成.*子代理 1 · 后台任务 1.*未读/);
+  await row.click();
+  await activeBackground.waitFor();
+  await unread.waitFor({ state: 'detached' });
+  const topbar = page.locator('.connection-status', { hasText: /后台运行中/ });
+  await topbar.waitFor();
+  report.topbar = await topbar.innerText();
   // The app started this session in auto mode.
   assert.equal(await page.locator('.session-execution-mode').getAttribute('data-execution-mode'), 'auto');
   assert.match(report.topbar, /后台运行中/);
@@ -151,10 +177,12 @@ try {
   report.native = await Promise.all((await readdir(registry)).filter(name => name.endsWith('.json')).map(async name => JSON.parse(await readFile(path.join(registry, name), 'utf8')).status));
   await page.screenshot({ path: path.join(output, 'background.png') });
 
-  // The shell ends first; with the subagent still running the chat stays in the background.
+  // Release only the shell and wait for the sidebar to show the remaining work.
+  await writeFile(path.join(cwd, '.release-background-shell'), '');
   await page.locator('.message-assistant').getByText('收到后台结果。').first().waitFor({ timeout: 45000 });
-  await page.waitForTimeout(1500);
-  report.afterShell = { background: await page.locator('.session-row.active[data-background]').count(), title: await row.getAttribute('title') };
+  const agentRunning = row.locator('.session-background-label', { hasText: /^子代理 1$/ });
+  await agentRunning.waitFor();
+  report.afterShell = { background: await activeBackground.count(), title: await row.getAttribute('title') };
   assert.equal(report.afterShell.background, 1, 'the subagent still runs');
   releaseAgent();
   // Replies to task notifications join the same reply bubble.
@@ -162,6 +190,7 @@ try {
     !document.querySelector('.session-row.active[data-background]'), null, { timeout: 45000 });
   report.after = { label: await row.locator('.session-state-label').innerText().catch(() => ''), topbar: await page.locator('.connection-status').innerText() };
   assert.doesNotMatch(report.after.topbar, /后台运行中/);
+  assert.equal(await row.locator('.session-background-label').count(), 0);
   // A status change ("后台运行中" → idle) does not move the buttons either.
   assert.deepEqual(await closeButton.boundingBox(), closeAt, 'a status change moved 关闭对话');
   const agentCard = async () => (await page.evaluate(() => window.__bgSnapshot?.activity ?? [])).find(item => item.kind === 'agent');
@@ -180,7 +209,9 @@ try {
     report.agentResumed = await agentCard();
     assert.equal(report.agentResumed.taskId, report.agentDone.taskId);
     // The reply is done; the resumed subagent keeps the chat in "后台运行中".
-    await page.locator('.session-row.active[data-background]').waitFor();
+    await activeBackground.waitFor();
+    await replyComplete.waitFor();
+    await agentRunning.waitFor();
     assert.match(await page.locator('.connection-status').innerText(), /后台运行中/);
     assert.equal(await page.locator('.activity-toolbar-count').innerText(), '1');
     await page.screenshot({ path: path.join(output, 'resumed.png') });
@@ -211,6 +242,7 @@ try {
 } finally {
   releaseAgent();
   releaseResumed();
+  await writeFile(path.join(cwd, '.release-background-shell'), '').catch(() => {});
   await app?.close().catch(() => {});
   try { execFileSync('tmux', ['kill-server'], { env: { ...process.env, TMUX_TMPDIR: root } }); } catch {}
   server.close();

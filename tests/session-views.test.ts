@@ -120,6 +120,17 @@ test('sidebar observations survive navigation, stay isolated, and clear when the
   assert.ok(!JSON.stringify(updates).includes('transcript fixture'));
   assert.deepEqual(transcripts, []);
 
+  const work = { agents: 1, shells: 1, monitors: 0, workflows: 0 };
+  first.currentSnapshot = { ...first.currentSnapshot!, background: 'still running', backgroundWork: work };
+  publish(first, 'idle');
+  assert.deepEqual(updates.at(-1)?.observation?.backgroundWork, work);
+  const withWork = updates.length;
+  publish(first, 'idle');
+  assert.equal(updates.length, withWork);
+  first.currentSnapshot.backgroundWork = { ...work, shells: 0 };
+  publish(first, 'idle');
+  assert.equal(updates.at(-1)?.observation?.backgroundWork?.shells, 0);
+
   views.replaySidebarStatus();
   assert.deepEqual(statuses().slice(-2), [
     ['first', 'same-id', '%1', 'idle'],

@@ -396,7 +396,7 @@ export interface SessionSnapshot {
 }
 /** The sidebar can use a live reader without sending an off-screen transcript. */
 export type SidebarStatusObservation = Pick<SessionSnapshot, 'status' | 'paneId' |
-  'navigationStatus' | 'navigationStatusDetail' | 'background' | 'error'>;
+  'navigationStatus' | 'navigationStatusDetail' | 'background' | 'backgroundWork' | 'error'>;
 export interface SidebarStatusUpdate {
   workspaceId: string;
   sessionId: string;

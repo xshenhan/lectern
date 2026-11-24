@@ -37,6 +37,10 @@ export const releaseNotes: ReleaseNote[] = [
   {
     version: '0.2.3',
     features: [
+      ['在侧栏右键可将会话标记为已读或未读，未读标记会保留到再次打开会话或手动清除。',
+        'Right-click a conversation in the sidebar to mark it as read or unread, with a manual unread mark lasting until you reopen the conversation or clear it.'],
+      ['主回复完成后，侧栏会同时显示回复已完成和仍在运行的子代理或后台任务，并保留未读标记。',
+        'When the main reply finishes, the sidebar shows reply completion alongside any running subagents or background tasks and keeps the unread mark.'],
       ['添加项目时，可在目录选择器里直接新建本机或 SSH 文件夹，并选为工作目录。',
         'When adding a project, create a folder on your computer or an SSH host directly from the picker and use it as the working directory.'],
     ],

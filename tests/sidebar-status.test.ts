@@ -166,15 +166,24 @@ test('only complete durable reply evidence, not tools, previews, errors or unrel
   const body=line(a('end_turn')); assert.equal(completedReplyOffset(Buffer.from(body+line(duration)),0,Buffer.byteLength(body),'s'),undefined,'duration cannot duplicate a previously read reply');
 });
 
-test('a reply that left background work running shows as running in the background, not finished', () => {
+test('a completed reply keeps its unread marker alongside background work', () => {
   const live = { ...session, paneId: '%1', status: 'idle' as const };
   const discovered = sessionSidebarState({ ...live, background: '终端仍在运行' }, { unread: true });
-  assert.equal(discovered.label, '后台运行中'); assert.equal(discovered.dot, 'background'); assert.equal(discovered.background, true);
-  assert.match(discovered.detail, /终端仍在运行/); assert.match(discovered.detail, /尚未阅读/);
+  assert.equal(discovered.label, '回复完成'); assert.equal(discovered.dot, 'background'); assert.equal(discovered.background, true);
+  assert.equal(discovered.backgroundLabel, '终端仍在运行');
+  assert.match(discovered.detail, /终端仍在运行/); assert.match(discovered.detail, /未读/);
+  assert.equal(aggregateSidebarState([discovered]), 'unread');
   // An open chat's snapshot is the fresher source either way.
   const open = { ...snapshot, paneId: '%1', status: 'idle' as const, navigationStatus: 'idle' as const };
   assert.equal(sessionSidebarState({ ...live, background: '终端仍在运行' }, { snapshot: open }).dot, 'idle');
-  assert.equal(sessionSidebarState(live, { snapshot: { ...open, background: '1 个子代理仍在运行' } }).label, '后台运行中');
+  const snapshotWithWork = { ...open, background: '仍有后台工作',
+    backgroundWork: { agents: 2, shells: 1, monitors: 1, workflows: 1 } };
+  const complete = sessionSidebarState(live, { snapshot: snapshotWithWork });
+  assert.equal(complete.label, '回复完成'); assert.equal(complete.dot, 'background');
+  assert.equal(complete.backgroundLabel, '子代理 2 · 后台任务 3');
+  assert.equal(sessionSidebarState(live, { observation: snapshotWithWork, unread: true }).backgroundLabel, complete.backgroundLabel);
+  assert.equal(sessionSidebarState(live, { snapshot: { ...open, background: 'still running',
+    backgroundWork: { agents: 0, shells: 0, monitors: 0, workflows: 0, unknownShells: true } } }).backgroundLabel, '后台任务运行中');
   // A reply still being written, or a session with no live pane, is not "background".
   assert.equal(sessionSidebarState(live, { snapshot: { ...open, status: 'working', background: '1 个子代理仍在运行' } }).kind, 'working');
   assert.equal(sessionSidebarState({ ...session, background: '终端仍在运行' }).background, undefined);
@@ -188,7 +197,7 @@ test('while a chat is being read the state stays on show and only a loading flag
   // Reading more of it: what the folder scan saw (here background work) still shows.
   const reading = sessionSidebarState({ ...session, paneId: '%1', status: 'idle', background: '终端仍在运行' },
     { snapshot: { ...snapshot, status: 'connecting' } });
-  assert.equal(reading.loading, true); assert.equal(reading.label, '后台运行中');
+  assert.equal(reading.loading, true); assert.equal(reading.label, '回复完成');
   // Read: no flag.
   assert.equal(sessionSidebarState(working, { selected: true, snapshot: { ...snapshot, paneId: '%1', status: 'working' } }).loading, undefined);
   assert.equal(sessionSidebarState(session, { selected: true }).label, '历史');

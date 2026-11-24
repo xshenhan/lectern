@@ -29,7 +29,13 @@ interface StatusOptions {
   unread?: boolean;
 }
 /** `loading`: the chat is being read; the sidebar spins its knot and keeps the state shown. */
-export interface SidebarSessionState extends ObservedState { dot?: SessionDot; background?: boolean; loading?: boolean }
+export interface SidebarSessionState extends ObservedState {
+  dot?: SessionDot;
+  background?: boolean;
+  backgroundLabel?: string;
+  unread?: boolean;
+  loading?: boolean;
+}
 function observedState(session: SessionInfo, options: StatusOptions): ObservedState {
   const snapshot = options.snapshot;
   if (snapshot && snapshot.status !== 'connecting') {
@@ -130,26 +136,34 @@ export function sessionSidebarState(session: SessionInfo, { observation, ...opti
   if (!options.snapshot && !options.scanError && observation?.paneId && observation.paneId === session.paneId && observation.status !== 'connecting') {
     options.snapshot = observation;
   }
-  const state = { ...observedState(session, options), ...(loading && { loading: true }) };
+  const state = { ...observedState(session, options), ...(loading && { loading: true }), ...(options.unread && { unread: true }) };
+  const withUnread = (detail: string) => options.unread ? t('sidebar.unreadDetail', { detail }) : detail;
   const background = backgroundWork(session, state, options);
   if (background) {
-    // Not finished: background shells, subagents, monitors or workflows still run.
-    const unread = options.unread ? t('sidebar.unreadSuffix') : '';
-    return { ...state, label: t('sidebar.background'), detail: t('sidebar.backgroundDetail', { work: background, unread }), dot: 'background', background: true };
+    const counts = options.snapshot?.backgroundWork;
+    const tasks = counts ? counts.shells + counts.monitors + counts.workflows : 0;
+    const categories = [
+      counts?.agents ? t('sidebar.runningAgents', { count: counts.agents }) : '',
+      tasks ? t('sidebar.runningTasks', { count: tasks }) : '',
+      counts?.unknownShells ? t('sidebar.runningTasksUnknown') : '',
+    ].filter(Boolean);
+    return {
+      ...state, label: t('sidebar.replyComplete'), detail: withUnread(t('sidebar.backgroundDetail', { work: background })),
+      dot: 'background', background: true, backgroundLabel: categories.join(' · ') || background,
+    };
   }
   const offline = options.snapshot?.status === 'offline' || (!options.snapshot && !!options.scanError);
   const dot: SessionDot | undefined = offline || state.kind === 'error' ? 'error' : state.kind === 'waiting' ? 'waiting' :
     options.unread ? 'unread' : state.kind === 'working' ? 'working' : state.live === true ? 'idle' : undefined;
-  return dot === 'unread' ? {
-    ...state, dot,
-    label: state.kind === 'working' ? state.label : t('sidebar.unread'),
-    detail: t('sidebar.unreadDetail', { detail: state.detail }),
-  } : { ...state, dot };
+  return {
+    ...state, dot, detail: withUnread(state.detail),
+    label: dot === 'unread' && state.kind !== 'working' ? t('sidebar.unread') : state.label,
+  };
 }
 
 export function aggregateSidebarState(states: SidebarSessionState[]) {
-  for (const dot of ['error', 'waiting', 'unread'] as const) if (states.some(state => state.dot === dot)) return dot;
-  return undefined;
+  for (const dot of ['error', 'waiting'] as const) if (states.some(state => state.dot === dot)) return dot;
+  return states.some(state => state.unread) ? 'unread' : undefined;
 }
 
 type SortSession = Pick<SessionInfo, 'updatedAt'>;

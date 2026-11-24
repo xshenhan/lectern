@@ -82,12 +82,17 @@ export class SessionViews {
     const { workspaceId, sessionId, paneId, status, navigationStatus, navigationStatusDetail, background, error } = snapshot;
     if (reader.key !== key(workspaceId, sessionId)) return;
     const observation = paneId && status !== 'connecting' && status !== 'offline'
-      ? { paneId, status, navigationStatus, navigationStatusDetail, background, error } : undefined;
+      ? { paneId, status, navigationStatus, navigationStatusDetail, background,
+        ...(background && snapshot.backgroundWork && { backgroundWork: snapshot.backgroundWork }), error } : undefined;
     const previous = reader.sidebarStatus?.observation;
+    const before = previous?.backgroundWork, after = observation?.backgroundWork;
     if (previous?.paneId === observation?.paneId && previous?.status === observation?.status &&
         previous?.navigationStatus === observation?.navigationStatus &&
         previous?.navigationStatusDetail === observation?.navigationStatusDetail &&
-        previous?.background === observation?.background && previous?.error === observation?.error) return;
+        previous?.background === observation?.background && previous?.error === observation?.error &&
+        before?.agents === after?.agents && before?.shells === after?.shells &&
+        before?.monitors === after?.monitors && before?.workflows === after?.workflows &&
+        before?.unknownShells === after?.unknownShells) return;
     const update = { workspaceId, sessionId, observation };
     reader.sidebarStatus = observation ? update : undefined;
     this.emitSidebarStatus(update);

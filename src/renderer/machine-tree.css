@@ -145,17 +145,21 @@
 .sidebar-tree .session-row > small { flex: none; color: var(--rail-muted); font-size: var(--text-caption); font-weight: 400; }
 .sidebar-tree .session-state-label { flex: 0 0 auto; color: var(--rail-muted); font-size: var(--text-caption); font-weight: 500; }
 /* Quiet states speak through the knot and dot alone. */
-.sidebar-tree .session-row[data-status="history"] .session-state-label,
-.sidebar-tree .session-row[data-status="idle"]:not(:has(.state-unread, .state-background)) .session-state-label { display: none; }
-.sidebar-tree .session-row[data-background] { --row-accent: var(--live); }
+.sidebar-tree .session-row:is([data-status="history"], [data-status="idle"]):not([data-unread], [data-background]) .session-state-label { display: none; }
+.sidebar-tree .session-row[data-background] {
+  height: auto;
+  min-height: 40px;
+  padding-block: 4px;
+  line-height: 1.3;
+}
 .sidebar-tree .session-row[data-background] .session-state-label { color: var(--live); }
 .sidebar-tree .session-row[data-status="working"] .session-state-label { color: var(--rail-ice); }
-.sidebar-tree .session-row:has(.state-unread) .session-state-label { color: var(--rail-ice); }
+.sidebar-tree .session-row[data-unread]:not([data-background]) .session-state-label { color: var(--rail-ice); }
 .sidebar-tree .session-row[data-status="waiting"] .session-state-label { color: var(--signal); }
 .sidebar-tree .session-row[data-status="error"] .session-state-label { color: var(--danger-dot); }
 .session-row-wrap .session-rename {
   position: absolute;
-  inset: 3px 3px auto auto;
+  inset: calc(50% - 12px) 3px auto auto;
   width: 24px;
   height: 24px;
   padding: 0;
@@ -178,9 +182,9 @@
   padding-inline-end: 31px;
   line-height: 1.3;
 }
-.sidebar-global .session-rename { inset-block-start: calc(50% - 12px); }
 .session-name-and-origin { display: flex; flex: 1; flex-direction: column; min-width: 0; }
 .session-origin { overflow: hidden; color: var(--rail-muted); font-size: var(--text-caption); font-weight: 400; white-space: nowrap; text-overflow: ellipsis; }
+.session-background-label { overflow: hidden; color: var(--live); font-size: var(--text-caption); font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
 
 /* Activity dots: one trailing column for folders and sessions. */
 .sidebar-tree .session-status-dot { flex-shrink: 0; width: 7px; min-width: 7px; height: 7px; border-radius: 50%; }

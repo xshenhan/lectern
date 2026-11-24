@@ -48,7 +48,7 @@ test('session menus: a stopped conversation can be archived; a running one canno
   const saved: SessionInfo = { id: '11111111-2222-4333-8444-555555555555', title: '修复登录', path: '/h/.claude/projects/x/1.jsonl', mapping: 'exact' };
   let renamed = false;
   const menu = sessionMenu(workspace, saved, { ...actions(), rename: () => { renamed = true; } });
-  assert.deepEqual(labels(menu), ['打开', '在旁边分屏打开', '—', '重命名…', '复制标题', '复制会话 ID', '复制续接命令', '—', '归档对话']);
+  assert.deepEqual(labels(menu), ['打开', '在旁边分屏打开', '标记为未读', '—', '重命名…', '复制标题', '复制会话 ID', '复制续接命令', '—', '归档对话']);
   item(menu, '重命名…').onSelect();
   assert.equal(renamed, true);
   let archived = '';
@@ -56,7 +56,8 @@ test('session menus: a stopped conversation can be archived; a running one canno
   assert.equal(item(archiving, '归档对话').disabled, false);
   item(archiving, '归档对话').onSelect();
   assert.equal(archived, saved.id, 'archiving needs no confirmation: it is restorable');
-  const running = sessionMenu(workspace, { ...saved, paneId: '%3' }, { ...actions(), rename: noop });
+  const running = sessionMenu(workspace, { ...saved, paneId: '%3' }, { ...actions(), rename: noop }, true);
+  assert.ok(labels(running).includes('标记为已读'));
   assert.equal(item(running, '归档对话').disabled, true);
   assert.equal(item(running, '归档对话').hint, '运行中');
 });

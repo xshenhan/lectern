@@ -24,6 +24,7 @@ import { aggregateSidebarState, compareActiveSidebarSessions, compareSidebarSess
 import { showContextMenu } from "./ContextMenu";
 import { folderMenu, machineMenu, sessionMenu, type SidebarMenuActions } from "./sidebar-menus";
 import { HoverPrefetch } from "./sidebar-prefetch";
+import { revisitTreeSession } from "./sidebar-receipts";
 import { useMachineConnections, type MachineConnection } from "./ssh-machines";
 import { hostMissing, useHostTools } from "./host-tools";
 import { isMissingToolsError, toolList } from "../shared/host-tools";
@@ -121,6 +122,7 @@ function SessionRow({ workspace, session, state, duplicate, selected, splitOpen,
   const waitingFirstRecord = session.paneId && !session.path && t('sidebar.waitingFirstRecord');
   const inOtherPane = !selected && !!splitOpen;
   const splitNote = inOtherPane && t('sidebar.splitOpen');
+  const unreadNote = state.unread && state.label !== t('sidebar.unread') && t('sidebar.unread');
   return (
     <div className="session-row-wrap">
       <button
@@ -128,12 +130,16 @@ function SessionRow({ workspace, session, state, duplicate, selected, splitOpen,
         draggable
         onDragStart={event => beginChatDrag(event.dataTransfer, { workspaceId: workspace.id, sessionId: session.id, title })}
         onDragEnd={endChatDrag}
-        onClick={() => { hoverPrefetch.leave(); onSelect(workspace, session.id); }}
+        onClick={() => {
+          hoverPrefetch.leave();
+          revisitTreeSession(workspace, session.id);
+          onSelect(workspace, session.id);
+        }}
         onMouseEnter={() => { if (!selected) hoverPrefetch.point(workspace.id, session.id); }}
         onFocus={() => { if (!selected) hoverPrefetch.point(workspace.id, session.id); }}
         onMouseLeave={() => hoverPrefetch.leave()}
         onBlur={() => hoverPrefetch.leave()}
-        onContextMenu={menuActions && (event => showContextMenu(event, sessionMenu(workspace, session, { ...menuActions, rename }), title))}
+        onContextMenu={menuActions && (event => showContextMenu(event, sessionMenu(workspace, session, { ...menuActions, rename }, state.unread), title))}
         aria-keyshortcuts="F2"
         onKeyDown={event => {
           if (event.key === "F2") {
@@ -142,7 +148,7 @@ function SessionRow({ workspace, session, state, duplicate, selected, splitOpen,
           }
         }}
         aria-current={selected ? "page" : undefined}
-        aria-label={[title, identity, origin, state.label, state.loading && t('sidebar.loading'), splitNote].filter(Boolean).join(t('sidebar.ariaJoin'))}
+        aria-label={[title, identity, origin, state.label, state.backgroundLabel, unreadNote, state.loading && t('sidebar.loading'), splitNote].filter(Boolean).join(t('sidebar.ariaJoin'))}
         aria-busy={state.loading || undefined}
         title={[titleText, origin, splitNote, session.id, branch, state.detail, waitingFirstRecord].filter(Boolean).join("\n")}
         data-workspace-id={workspace.id}
@@ -152,15 +158,18 @@ function SessionRow({ workspace, session, state, duplicate, selected, splitOpen,
         data-status={state.kind}
         data-session-state={state.kind}
         data-background={state.background || undefined}
+        data-unread={state.unread || undefined}
         data-loading={state.loading || undefined}
         data-split-open={inOtherPane || undefined}
       >
-        {origin ? <span className="session-name-and-origin">
+        {origin || state.backgroundLabel ? <span className="session-name-and-origin">
           <span className="session-title">{title}</span>
-          <span className="session-origin">{origin}</span>
+          {origin && <span className="session-origin">{origin}</span>}
+          {state.backgroundLabel && <span className="session-background-label">{state.backgroundLabel}</span>}
         </span> : <span className="session-title">{title}</span>}
         {identity && <small>{identity}</small>}
         <span className="session-state-label">{state.label}</span>
+        {state.unread && state.dot !== 'unread' && <span className="session-status-dot state-unread" aria-hidden="true" />}
         {state.dot && <span className={`session-status-dot state-${state.dot}`} aria-hidden="true" />}
       </button>
       <button

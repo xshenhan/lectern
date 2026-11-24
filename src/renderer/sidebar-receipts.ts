@@ -1,6 +1,7 @@
 import type { ReplyBaselines, SessionInfo, TranscriptPosition, Workspace } from '../shared/types';
 
 type Receipt = TranscriptPosition & { seen: number; unread?: number };
+type SavedEntry = [id: string, receipt: Receipt | null, manuallyUnread?: true];
 const validOffset = (n: unknown): n is number => Number.isSafeInteger(n) && Number(n) >= 0;
 const missing: NonNullable<SessionInfo['replyProgress']> = { inode: 'missing', offset: 0 };
 
@@ -8,19 +9,44 @@ const missing: NonNullable<SessionInfo['replyProgress']> = { inode: 'missing', o
  * delete a receipt: an SSH mount or a limited listing may reappear later. */
 export class ReplyReceipts {
   private entries = new Map<string, Receipt>();
+  private manuallyUnread = new Set<string>();
   constructor(saved?: string) {
     if (saved) try {
-      for (const [id, r] of JSON.parse(saved)) {
-        if (typeof id === 'string' && r && typeof r.inode === 'string' && validOffset(r.offset) && validOffset(r.seen) &&
+      for (const [id, r, manual] of JSON.parse(saved)) {
+        if (typeof id !== 'string') continue;
+        if (r && typeof r.inode === 'string' && validOffset(r.offset) && validOffset(r.seen) &&
             (r.unread === undefined || validOffset(r.unread) && r.unread > r.seen)) this.entries.set(id, r);
+        if (manual === true) this.manuallyUnread.add(id);
       }
     } catch { /* Invalid preferences are not evidence of a reply. */ }
   }
-  serialize() { return JSON.stringify([...this.entries]); }
+  serialize() {
+    // Keep the existing pair for transcript positions. A manual flag can
+    // stand on its own before this chat has a scanned position.
+    const rows = Array.from(this.entries, ([id, r]): SavedEntry => this.manuallyUnread.has(id) ? [id, r, true] : [id, r]);
+    for (const id of this.manuallyUnread) if (!this.entries.has(id)) rows.push([id, null, true]);
+    return JSON.stringify(rows);
+  }
   baselines(): ReplyBaselines {
     return Object.fromEntries(Array.from(this.entries, ([id, r]) => [id, { inode: r.inode, offset: Math.max(r.offset, r.seen) }]));
   }
-  unread(id: string) { return this.entries.get(id)?.unread !== undefined; }
+  unread(id: string) { return this.manuallyUnread.has(id) || this.entries.get(id)?.unread !== undefined; }
+
+  setUnread(id: string, unread: boolean): boolean {
+    if (unread) {
+      if (this.manuallyUnread.has(id)) return false;
+      this.manuallyUnread.add(id);
+      return true;
+    }
+    const manual = this.revisit(id);
+    const r = this.entries.get(id);
+    if (r?.unread === undefined) return manual;
+    this.entries.set(id, { ...r, seen: Math.max(r.seen, r.offset, r.unread), unread: undefined });
+    return true;
+  }
+
+  /** An explicit open clears the marker. Automatic reads only advance receipts. */
+  revisit(id: string) { return this.manuallyUnread.delete(id); }
 
   observe(session: SessionInfo): boolean {
     const p = session.replyProgress ?? (!session.path && session.paneId ? missing : undefined);
@@ -85,6 +111,18 @@ export function readTreeSession(ws: Workspace, id: string, position: TranscriptP
   if (!receipts.read(id, position)) return;
   store(scope, receipts);
   if (unread !== receipts.unread(id)) listeners.forEach(fn => fn());
+}
+export function setTreeSessionUnread(ws: Workspace, id: string, unread: boolean) {
+  const { scope, receipts } = workspaceReceipts(ws);
+  if (!receipts.setUnread(id, unread)) return;
+  store(scope, receipts);
+  listeners.forEach(fn => fn());
+}
+export function revisitTreeSession(ws: Workspace, id: string) {
+  const { scope, receipts } = workspaceReceipts(ws);
+  if (!receipts.revisit(id)) return;
+  store(scope, receipts);
+  listeners.forEach(fn => fn());
 }
 export function forgetTreeReceipts(id: string) {
   const entry = ledgers.get(id);

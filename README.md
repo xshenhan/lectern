@@ -126,7 +126,10 @@ The dot after a conversation in the sidebar shows its state:
 | Blinking green | Claude is replying (steady when the system asks for reduced motion) |
 | Orange | Waiting for your input, a permission or a prompt |
 | Red | A connection or session problem |
-| Blue | A new reply you have not read yet |
+| Blue | An unread reply or a conversation you marked as unread |
+| Pulsing green ring | The reply is complete and background work is still running |
+
+Right-click a conversation to mark it as read or unread. Reopening the conversation from the sidebar clears a manual unread mark.
 
 ## Build from source
 
