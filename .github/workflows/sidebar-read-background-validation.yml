@@ -1,0 +1,173 @@
+name: Sidebar read and background status validation
+
+on:
+  push:
+    branches: [codex/pr-validation-sidebar-read-background]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24'
+  LECTERN_LOCALE: zh-CN
+
+jobs:
+  tests:
+    name: Lectern test suites
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: 2d9f9994867e4cc2596899f1da6666d2f7d8cfca
+      package: false
+
+  compatibility:
+    name: Claude Code compatibility
+    uses: ./.github/workflows/claude-code-compat.yml
+    with:
+      ref: 2d9f9994867e4cc2596899f1da6666d2f7d8cfca
+
+  installers:
+    name: Installers (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+            target: --linux
+            arch: x64
+          - os: macos-latest
+            platform: mac-arm64
+            target: --mac
+            arch: arm64
+          - os: macos-15-intel
+            platform: mac-x64
+            target: --mac
+            arch: x64
+          - os: windows-latest
+            platform: windows-x64
+            target: --win
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 2d9f9994867e4cc2596899f1da6666d2f7d8cfca
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y xvfb
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - run: npm ci
+      - run: npm run build
+      - name: Build the release installers without release credentials
+        shell: bash
+        env:
+          LECTERN_PACKAGE_OUT: test-results/package
+        run: bash scripts/ci-package.sh ${{ matrix.target }} --${{ matrix.arch }}
+      - name: Verify installer checksums
+        run: node scripts/release-checksums.mjs test-results/package/assets
+      - name: Verify macOS disk image
+        if: runner.os == 'macOS'
+        id: disk-image
+        shell: bash
+        run: |
+          images=(test-results/package/assets/*-mac-${{ matrix.arch }}.dmg)
+          test "${#images[@]}" -eq 1
+          hdiutil verify "${images[0]}"
+          printf 'path=%s\nname=%s\n' "${images[0]}" "${images[0]##*/}" >> "$GITHUB_OUTPUT"
+      - name: Upload macOS DMG
+        if: runner.os == 'macOS'
+        id: dmg
+        uses: actions/upload-artifact@v7
+        with:
+          # Raw uploads use the filename, and overwrite deletes by the explicit name.
+          name: ${{ steps.disk-image.outputs.name }}
+          path: ${{ steps.disk-image.outputs.path }}
+          archive: false
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+      - name: Link the DMG in the run summary
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          DMG_URL: ${{ steps.dmg.outputs.artifact-url }}
+        run: printf '[Download the macOS %s DMG](%s)\n' '${{ matrix.arch }}' "$DMG_URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload other installers and checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: installers-${{ matrix.platform }}
+          path: |
+            test-results/package/assets/
+            !test-results/package/assets/*.dmg
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+          retention-days: 30
+      - name: Synchronize the macOS smoke test with native window events
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          VALIDATION_SHA: ${{ github.workflow_sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$VALIDATION_SHA"
+          git show "$VALIDATION_SHA:.github/verification-patches/mac-package-smoke.patch" | git apply
+      - name: Launch the packaged app
+        shell: bash
+        env:
+          LECTERN_DMG: ${{ steps.disk-image.outputs.path }}
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s '-screen 0 1600x1000x24' node scripts/smoke-package.mjs test-results/package
+          elif [ "$RUNNER_OS" = macOS ]; then
+            mount_dir=$(mktemp -d "${RUNNER_TEMP}/lectern-dmg.XXXXXX")
+            trap 'hdiutil detach "$mount_dir" -quiet || hdiutil detach "$mount_dir" -quiet -force || true; rmdir "$mount_dir" || true' EXIT
+            hdiutil attach "${LECTERN_DMG}" -readonly -nobrowse -quiet -mountpoint "$mount_dir"
+            codesign --verify --deep --strict "$mount_dir/Lectern.app"
+            node scripts/smoke-package.mjs "$mount_dir/Lectern.app/Contents/MacOS/Lectern"
+          else
+            node scripts/smoke-package.mjs test-results/package
+          fi
+      - name: Askpass relay in the packaged app
+        if: runner.os != 'Windows'
+        run: node scripts/smoke-askpass-helper.mjs test-results/package
+      - name: In-app SSH login through the packaged app (scripted SSH)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s '-screen 0 1600x1000x24' node scripts/ssh-login-ui-e2e.mjs test-results/package
+          else
+            node scripts/ssh-login-ui-e2e.mjs test-results/package
+          fi
+      - name: Upload smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-smoke-${{ matrix.platform }}
+          path: test-results/*.png
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
+
+  full-pr-validation:
+    name: Full PR validation
+    if: always()
+    needs: [tests, compatibility, installers]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TESTS: ${{ needs.tests.result }}
+      COMPATIBILITY: ${{ needs.compatibility.result }}
+      INSTALLERS: ${{ needs.installers.result }}
+    steps:
+      - name: Require all validation jobs to pass
+        run: |
+          printf 'Application tests %s\nClaude Code compatibility %s\nInstallers %s\n' "$TESTS" "$COMPATIBILITY" "$INSTALLERS"
+          test "$TESTS" = success && test "$COMPATIBILITY" = success && test "$INSTALLERS" = success
