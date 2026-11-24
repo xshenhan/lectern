@@ -1,0 +1,207 @@
+# Lectern tests. One matrix job runs `npm run test:all` (scripts/test-all.mjs) on
+# each platform: on Linux (xvfb) and macOS the whole offline suite (typecheck, unit
+# tests, build, every desktop e2e) in two shards each, split by step time
+# (`--shard i/n`, times in scripts/test-all-plan.mjs; build runs in every shard; the
+# slower macOS runner runs two steps at a time, `--jobs 2`); on Windows typecheck,
+# unit tests, build and the e2e that need no local session, tmux or demo (Windows
+# connects only over SSH; the list is in test-all-plan.mjs). The first Linux shard
+# also runs the private-information guard and a production dependency audit. Each
+# job stays under 10 minutes. Optionally a packaging smoke test of the unpacked app
+# on every platform (on macOS and Linux also the SSH login's askpass relay in the
+# packaged app). Nothing here talks to a real model or SSH host. npm's download
+# cache is cached; tmux (Homebrew, apt) and the pinned Claude Code install in the
+# background while npm ci runs.
+#
+# It runs when release.yml calls it for a pushed v* tag (the release only
+# publishes if it passes) or by hand from the Actions tab. Pushes and pull
+# requests do not trigger it.
+name: CI
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Tag, branch or commit to test (empty for the triggering ref)
+        type: string
+        default: ''
+      package:
+        description: Also package and launch the unpacked app on every platform
+        type: boolean
+        default: true
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag, branch or commit to test (empty for the selected branch)
+        type: string
+        default: ''
+      package:
+        description: Also package and launch the unpacked app on every platform
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24'
+  # Claude Code used by the e2e that drive the real CLI against a loopback fake model
+  # (claude-code-compat.yml covers the other releases, including latest and stable).
+  CLAUDE_CODE_VERSION: '2.1.329'
+  LECTERN_LOCALE: zh-CN
+
+jobs:
+  test:
+    # Linux and macOS: the whole suite in two shards each; Windows: a subset (see the top).
+    name: Tests (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS 1/2, id: macos-1, os: macos-15, shard: 1/2, jobs: 2 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      # Homebrew's tmux (about 17 s, mostly pouring five bottles), the apt packages the Linux
+      # image lacks and Claude Code (3-6 s) install while npm ci and the Electron download run;
+      # the step before the tests waits for them. This hides them better than caches did
+      # (restoring Claude Code took 6-7 s on macOS, more than installing it).
+      - name: Install tmux (Homebrew, apt) and Claude Code in the background
+        if: runner.os != 'Windows'
+        env:
+          PREFIX: ${{ runner.temp }}/claude-code
+        run: |
+          # Each writes its exit status to $RUNNER_TEMP/<name>.exit, failed or not (no -e in there).
+          bg() { name=$1; shift; (set +e; "$@" > "$RUNNER_TEMP/$name.log" 2>&1; echo $? > "$RUNNER_TEMP/$name.exit") < /dev/null > /dev/null 2>&1 & }
+          # Linux: only what the image lacks (it has tmux, xvfb and the OpenSSH server; Pillow is
+          # for the workspace image thumbnails), refreshing the package lists only if that fails.
+          apt_missing() {
+            sudo rm -f /var/lib/man-db/auto-update
+            missing=$(for p in tmux xvfb openssh-server python3-pil; do dpkg -s "$p" >/dev/null 2>&1 || echo "$p"; done | xargs)
+            echo "missing: ${missing:-none}"
+            [ -z "$missing" ] || sudo apt-get install -y --no-install-recommends $missing \
+              || { sudo apt-get update && sudo apt-get install -y --no-install-recommends $missing; }
+          }
+          if [ "$RUNNER_OS" = macOS ]; then bg tools brew install tmux; else bg tools apt_missing; fi
+          bg claude npm install -g --prefix "$PREFIX" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          echo "$PREFIX/bin" >> "$GITHUB_PATH"
+      - name: Let Electron use its sandbox (Ubuntu 24.04 restricts user namespaces)
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - run: npm ci
+      # Electron fetches its binary on first use, otherwise inside the first e2e of a shard. Not
+      # cached: from GitHub it takes 2-6 s, about what restoring and unpacking a cache costs.
+      - name: Download Electron
+        run: node node_modules/electron/install.js
+      - name: Private information guard
+        if: matrix.id == 'linux-1'
+        run: node scripts/check-private-info.mjs
+      - name: Audit production dependencies (reported, never blocks a release)
+        if: matrix.id == 'linux-1'
+        run: npm audit --omit=dev --audit-level=high || echo "::warning::npm audit reports high-severity advisories in production dependencies"
+      - name: Wait for tmux and Claude Code (no model requests; e2e point it at a loopback fake)
+        if: runner.os != 'Windows'
+        run: |
+          for name in tools claude; do
+            until [ -f "$RUNNER_TEMP/$name.exit" ]; do sleep 1; done
+            [ ! -f "$RUNNER_TEMP/$name.log" ] || { echo "::group::$name"; cat "$RUNNER_TEMP/$name.log"; echo "::endgroup::"; }
+            [ "$(cat "$RUNNER_TEMP/$name.exit")" = 0 ] || exit 1
+          done
+          DISABLE_AUTOUPDATER=1 claude --version
+      - name: Tests (npm run test:all, shard ${{ matrix.shard }})
+        run: npm run test:all -- --shard ${{ matrix.shard }} --jobs ${{ matrix.jobs || 1 }} --retries 1
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-all-logs-${{ matrix.id }}
+          path: test-results/test-all/
+          if-no-files-found: ignore
+      - name: Upload screenshots and diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.id }}
+          path: |
+            test-results/
+            !test-results/package/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  package:
+    # release.yml turns this off: its own build job packages and launches every platform.
+    if: inputs.package
+    name: Package smoke test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: --linux
+          - os: macos-latest
+            target: --mac
+          - os: windows-latest
+            target: --win
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          dpkg -s xvfb >/dev/null 2>&1 || sudo apt-get install -y --no-install-recommends xvfb \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb; }
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - run: npm ci
+      - run: npm run build
+      - name: Package the unpacked app (ad hoc signature on macOS)
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: node scripts/package-desktop.mjs ${{ matrix.target }} --dir --publish never -c.directories.output=test-results/package -c.mac.identity=-
+      - name: Launch the packaged app
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s '-screen 0 1600x1000x24' node scripts/smoke-package.mjs test-results/package
+          else
+            node scripts/smoke-package.mjs test-results/package
+          fi
+      # SSH login prompts go through an askpass relay run as Node: on macOS in the app's
+      # LSUIElement helper (the app's own executable would flash a second Dock icon).
+      - name: Askpass relay in the packaged app (macOS helper, no Dock icon)
+        if: runner.os != 'Windows'
+        run: node scripts/smoke-askpass-helper.mjs test-results/package
+      - name: In-app SSH login through the packaged app (scripted ssh, no real host)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s '-screen 0 1600x1000x24' node scripts/ssh-login-ui-e2e.mjs test-results/package
+          else
+            node scripts/ssh-login-ui-e2e.mjs test-results/package
+          fi
+      - name: Upload smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-smoke-${{ matrix.os }}
+          path: test-results/*.png
+          if-no-files-found: ignore
+          retention-days: 7
